@@ -129,16 +129,20 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 		}
 		return v
 	}
-	get("disabled")
-	a.call("PUT", path+"/access", map[string]any{"public_keys": []string{"not a key"}}, 400, nil)
+	get("ready")
+	if get("ready").HasPublicKeys {
+		t.Fatal("new installation unexpectedly has SSH public keys")
+	}
+	var initial runtime.Container
+	a.call("GET", path+"/inspect", nil, 200, &initial)
+	a.call("PUT", "/settings/ssh-keys", map[string]any{"public_keys": []string{"not a key"}}, 400, nil)
 	first, line := testSSHKey(t)
 	rotate := func(keys ...string) {
 		t.Helper()
 		if keys == nil {
 			keys = []string{}
 		}
-		a.call("PUT", path+"/access", map[string]any{"public_keys": keys}, 202, &op)
-		a.opDone(op.Op)
+		a.call("PUT", "/settings/ssh-keys", map[string]any{"public_keys": keys}, 200, nil)
 	}
 	rotate(line)
 	ready := get("ready")
@@ -208,8 +212,8 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 		t.Fatal(e)
 	}
 	info, e := c.Inspect(ctx, w)
-	if e != nil || !info.NetworkIPs[conf.Network].IsValid() {
-		t.Fatalf("workspace bridge address unavailable: %+v %v", info, e)
+	if e != nil || info.ID != initial.ID || w.Generation != 1 || !info.NetworkIPs[conf.Network].IsValid() {
+		t.Fatalf("live key update replaced the container or lost its SSH network: %+v %v", info, e)
 	}
 	docker, e := client.New(client.FromEnv)
 	if e != nil {
@@ -231,17 +235,21 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 	a.call("POST", path+"/stop", nil, 202, &op)
 	a.opDone(op.Op)
 	get("stopped")
-	rejects(first, "coder", ssh.PublicKeys(first))
 	a.call("PUT", path+"/codex-config", map[string]any{
 		"revision": 0, "managed": true, "agents_md": "Managed SSH instructions\n",
 		"config_toml": runtime.CodexConfigSeed + "model = 'ssh-fixture-model'\n",
 		"auth_json":   `{"fixture":"fake-ssh-login"}`,
 	}, 200, nil)
+	stoppedKey, stoppedLine := testSSHKey(t)
+	rotate(stoppedLine)
+	rejects(first, "coder", ssh.PublicKeys(first))
 	a.call("POST", path+"/start", nil, 202, &op)
 	a.opDone(op.Op)
 	if v := get("ready"); v.Fingerprint != ready.Fingerprint || v.Port != ready.Port {
 		t.Fatal("stop/start changed SSH identity")
 	}
+	login(stoppedKey).Close()
+	rotate(line)
 	stranger, replacement := testSSHKey(t)
 	rejects(stranger, "coder", ssh.PublicKeys(stranger))
 	rejects(first, "root", ssh.PublicKeys(first))
@@ -257,6 +265,7 @@ test "$(id -u)" = 10001
 command -v codex
 test ! -r /var/lib/cloudex-ssh/ssh_host_ed25519_key
 test ! -w /run/cloudex-ssh/authorized_keys
+test "$(stat -c '%u:%g:%a' /run/cloudex-ssh/authorized_keys)" = 0:0:644
 printf kept >/workspace/project/ssh-fixture
 printf kept >~/.codex/ssh-fixture
 test ! -e ~/.codex/AGENTS.md
@@ -329,11 +338,11 @@ test "$(stat -c '%u:%g:%a' ~/.codex/auth.json)" = 10001:10001:600`)
 	}
 	sshSession.Close()
 	rotate()
-	get("disabled")
+	get("ready")
 	rejects(stranger, "coder", ssh.PublicKeys(stranger))
 	rotate(replacement)
 	if v := get("ready"); v.Fingerprint != ready.Fingerprint || v.Port != ready.Port {
-		t.Fatal("disable/re-enable changed SSH identity")
+		t.Fatal("key replacement changed SSH identity")
 	}
 	a.call("DELETE", path, map[string]any{"confirm": created.Workspace, "purge": true}, 202, &op)
 	a.opDone(op.Op)

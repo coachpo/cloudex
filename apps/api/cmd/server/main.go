@@ -150,12 +150,13 @@ func run(parent context.Context) error {
 	if e != nil {
 		return e
 	}
-	agents, e := startAgentServices(ctx, db, instance, aead)
+	controller := &control.Control{Store: db, Key: aead, SSH: ssh}
+	agents, e := startAgentServices(ctx, db, instance, aead, controller.SyncConnectedHostSSHKeys)
 	if e != nil {
 		return e
 	}
 	defer agents.close()
-	controller := &control.Control{Store: db, Agents: agents.Hub, Key: aead, SSH: ssh}
+	controller.Agents = agents.Hub
 	signer, e := controller.PrepareGateway(ctx, instance)
 	if e != nil {
 		return e

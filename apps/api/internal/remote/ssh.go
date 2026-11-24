@@ -1,8 +1,6 @@
 package remote
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"net/netip"
 	"regexp"
@@ -94,9 +92,4 @@ func Alias(id string) string { return "cloudex-" + id }
 func WorkspaceID(alias string) (string, bool) {
 	id, ok := strings.CutPrefix(alias, "cloudex-")
 	return id, ok && workspaceID.MatchString(id)
-}
-
-func Revision(network string, keys []string) string {
-	hash := sha256.Sum256([]byte("gateway\n" + network + "\n" + strings.Join(keys, "\n")))
-	return hex.EncodeToString(hash[:])
 }

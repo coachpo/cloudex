@@ -35,7 +35,14 @@ func (e recoveryEngine) Run(ctx context.Context, _ string, exec runtime.Exec) (i
 	return e.run(ctx, exec)
 }
 
-func (e recoveryEngine) SSHHostKey(context.Context, string) (string, error) { return e.hostKey() }
+func (e recoveryEngine) SyncAuthorizedKeys(context.Context, string, []string) error { return nil }
+
+func (e recoveryEngine) SSHHostKey(context.Context, string) (string, error) {
+	if e.hostKey != nil {
+		return e.hostKey()
+	}
+	return "fixture-host-key", nil
+}
 
 type reconciliationAgents struct {
 	engines map[string]runtime.Engine
@@ -69,7 +76,7 @@ func TestSlowHostDoesNotDelayNextReconciliationOfOtherHosts(t *testing.T) {
 	for i := range 4 {
 		w := store.Workspace{ID: store.ID(), HostID: host.ID, Name: fmt.Sprintf("slow %d", i),
 			Image: "fixture", Branch: "main", Desired: "running", CPU: 500, Memory: 512}
-		op, err := db.Create(ctx, w, "", "", nil, nil)
+		op, err := db.Create(ctx, w, "", "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,11 +134,14 @@ func seedRecoveryWorkspaceAt(t *testing.T, path, state string, keys []string) (*
 	t.Cleanup(func() { _ = db.Close() })
 	w := store.Workspace{ID: store.ID(), Name: "recovery", Image: "fixture", Branch: "main",
 		CPU: 500, Memory: 512, Desired: state, Generation: 1}
-	op, err := db.Create(ctx, w, "", "", keys, nil)
+	if err := db.SetSSHKeys(ctx, keys); err != nil {
+		t.Fatal(err)
+	}
+	op, err := db.Create(ctx, w, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ci := runtime.Container{ID: "fixture-container", ImageID: "fixture", State: state, StartedAt: "fixture-original-start"}
+	ci := runtime.Container{ID: "fixture-container", ImageID: "fixture", State: state, StartedAt: "fixture-original-start", NetworkIPs: map[string]netip.Addr{"": netip.MustParseAddr("172.19.0.2")}}
 	if state == "stopped" {
 		ci.State = "exited"
 	}
@@ -153,7 +163,6 @@ func testReconcileVerifiedStart(t *testing.T, mode string) {
 	keys := []string{"fixture-key"}
 	ctx := t.Context()
 	db, w, ci := seedRecoveryWorkspace(t, "stopped", keys)
-	ci.SSHRevision = remote.Revision(network, keys)
 	ci.NetworkIPs = map[string]netip.Addr{network: netip.MustParseAddr("172.19.0.2")}
 	op, err := db.Enqueue(ctx, w.ID, "start", false, "", "")
 	if err != nil {

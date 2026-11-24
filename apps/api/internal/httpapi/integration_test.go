@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coachpo/cloudex/apps/api/internal/control"
+	"github.com/coachpo/cloudex/apps/api/internal/remote"
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"github.com/coder/websocket"
@@ -379,7 +380,24 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { d.Close() })
-	c := &control.Control{Store: s, Engine: d}
+	docker, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { docker.Close() })
+	networkName := "cloudex-lifecycle-" + instance[:12]
+	bridge, err := docker.NetworkCreate(ctx, networkName, client.NetworkCreateOptions{Driver: "bridge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := docker.NetworkRemove(cleanup, bridge.ID, client.NetworkRemoveOptions{}); err != nil {
+			t.Error(err)
+		}
+	})
+	c := &control.Control{Store: s, Engine: d, SSH: remote.Config{Network: networkName}}
 	a := newTestAPI(t, c)
 	a.login()
 	run := func() func() {
@@ -418,7 +436,7 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 	var info runtime.Container
 	a.call("GET", path+"/inspect", nil, 200, &info)
 	old := info.ID
-	if info.State != "running" || len(info.Mounts) != 1 || old == "" {
+	if info.State != "running" || len(info.Mounts) != 2 || old == "" {
 		t.Fatalf("inspect: %+v", info)
 	}
 	a.call("GET", path+"/metrics", nil, 200, nil)

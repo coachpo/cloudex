@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { accountMutationKey, APIError, api, change, hostImageReady, hostListQuery, hostPath, replaceSession, saveSetting, sessionQuery,
-  settingsQuery, templatesQuery, workspaceImageDraft, type Session, type Settings } from "@/lib/api";
+  settingsQuery, templatesQuery, workspaceImageDraft, publicKeyLines, type Session, type Settings } from "@/lib/api";
 import { hostName } from "@/lib/i18n";
 import { Empty, Facts, Notice } from "@/components/shared";
 import { Button } from "@/components/ui/button";
@@ -217,6 +217,47 @@ function AccessSettings({ settings, observedAt, unavailable }: SettingsObservati
   </section>;
 }
 
+const sshKeysQuery = {
+  queryKey: ["ssh-keys"],
+  queryFn: ({ signal }: { signal: AbortSignal }) => api<{ public_keys: string[] }>("/settings/ssh-keys", { signal }),
+};
+
+function SSHKeySettings() {
+  const { t } = useT();
+  const client = useQueryClient();
+  const q = useQuery(sshKeysQuery);
+  const [draft, setDraft] = useState<string>();
+  const write = useMutation({
+    mutationFn: (keys: string[]) => change("/settings/ssh-keys", "PUT", { public_keys: keys }),
+    onSuccess: () => setDraft(undefined),
+    onSettled: () => Promise.all([
+      client.invalidateQueries({ queryKey: sshKeysQuery.queryKey }),
+      client.invalidateQueries({ queryKey: ["access"] }),
+    ]),
+  });
+  const saved = q.data?.public_keys.join("\n") ?? "";
+  const value = draft ?? saved;
+  const keys = publicKeyLines(value);
+  const canSave = q.isSuccess && !write.isPending && (keys.join("\n") !== saved || write.isError);
+  return <section id="ssh-keys" className="panel" aria-labelledby="ssh-keys-heading">
+    <div className="section-head"><h2 id="ssh-keys-heading">{t("sshPublicKeys")}</h2></div>
+    {q.error && <Notice error={q.error} retry={() => q.refetch()}/>}
+    {q.data && <form className="form" onSubmit={e => { e.preventDefault(); if (canSave) write.mutate(keys); }}>
+      <FieldGroup>
+        <Field data-disabled={write.isPending}>
+          <FieldLabel htmlFor="ssh-keys-input">{t("authorizedKeys")}</FieldLabel>
+          <textarea id="ssh-keys-input" className="field" rows={5} spellCheck={false} value={value} maxLength={61440}
+            disabled={write.isPending} onChange={e => setDraft(e.target.value)} aria-describedby="ssh-keys-hint"/>
+          <p id="ssh-keys-hint" className="form-note">{t("sshPublicKeysHint")}</p>
+        </Field>
+      </FieldGroup>
+      {write.error && <Notice error={write.error}/>}
+      {write.isSuccess && <p className="small muted" role="status">{t("sshKeysSaved")}</p>}
+      <div className="actions"><Button disabled={!canSave}>{write.isPending ? t("saving") : t("saveSSHKeys")}</Button></div>
+    </form>}
+  </section>;
+}
+
 export default function SettingsPage() {
   const { t } = useT();
   const session = useQuery({ ...sessionQuery, enabled: false });
@@ -231,6 +272,7 @@ export default function SettingsPage() {
         <Facts items={[[t("cliAccount"),<code>codex login --device-auth</code>]]}/>
         <p className="small muted mt-3">{t("managedCodexSignIn")}</p>
       </section>
+      <SSHKeySettings/>
       {q.data && <AccessSettings settings={q.data} observedAt={q.dataUpdatedAt} unavailable={q.isError}/>}
     </div>
   </>;

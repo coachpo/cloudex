@@ -3,7 +3,9 @@ package control
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,7 +20,6 @@ const sshTestNetwork, sshTestKey = "fixture-network", "fixture-key"
 func seedSSHWorkspace(t *testing.T) (*Control, store.Workspace, *runtime.Container) {
 	t.Helper()
 	db, w, ci := seedRecoveryWorkspace(t, "running", []string{sshTestKey})
-	ci.SSHRevision = remote.Revision(sshTestNetwork, []string{sshTestKey})
 	ci.NetworkIPs = map[string]netip.Addr{sshTestNetwork: netip.MustParseAddr("172.19.0.2")}
 	c := &Control{Store: db, SSH: remote.Config{Network: sshTestNetwork}, Engine: recoveryEngine{
 		inspect: func(context.Context) (runtime.Container, error) { return ci, nil },
@@ -72,9 +73,8 @@ func TestSSHRouteRequiresAuthorizedKeyAndCurrentContainer(t *testing.T) {
 		routed    bool
 	}{
 		{name: "running current generation", routed: true},
-		{name: "key authorized elsewhere", key: "another-key"},
+		{name: "unknown key", key: "another-key"},
 		{name: "container paused", container: func(c *runtime.Container) { c.State = "paused" }},
-		{name: "authorized keys changed after the container was created", container: func(c *runtime.Container) { c.SSHRevision = "outdated" }},
 		{name: "not attached to the gateway network", container: func(c *runtime.Container) { c.NetworkIPs = nil }},
 		{name: "recorded container was replaced", container: func(c *runtime.Container) { c.ID = "another-container" }},
 		{name: "lifecycle operation queued", workspace: func(t *testing.T, db *store.Store, id string) {
@@ -139,5 +139,55 @@ func TestSSHAdmissionRejectsRouteThatChangedAfterDial(t *testing.T) {
 	ci.NetworkIPs = map[string]netip.Addr{sshTestNetwork: netip.MustParseAddr("172.19.0.3")}
 	if err := c.AdmitSSH(ctx, w.ID, sshTestKey, dialed, accept); err == nil || accepted != 1 {
 		t.Fatalf("stale route was admitted: accepted=%d err=%v", accepted, err)
+	}
+}
+
+type sshSyncRuntime struct {
+	runtime.Engine
+	inspect func(runtime.Spec) (runtime.Container, error)
+	sync    func(string, []string) error
+}
+
+func (e sshSyncRuntime) Inspect(_ context.Context, spec runtime.Spec) (runtime.Container, error) {
+	return e.inspect(spec)
+}
+
+func (e sshSyncRuntime) SyncAuthorizedKeys(_ context.Context, id string, keys []string) error {
+	return e.sync(id, keys)
+}
+
+func TestSyncSSHKeysFindsRunningCreateBeforeOutcomeIsRecorded(t *testing.T) {
+	ctx := t.Context()
+	db, _, _ := seedRecoveryWorkspace(t, "stopped", nil)
+	w := store.Workspace{ID: store.ID(), Name: "pending", Image: "fixture", Branch: "main", CPU: 500, Memory: 512, Desired: "running"}
+	op, err := db.Create(ctx, w, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.ClaimOp(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSSHKeys(ctx, []string{sshTestKey}); err != nil {
+		t.Fatal(err)
+	}
+	var writes int
+	engine := sshSyncRuntime{
+		inspect: func(spec runtime.Spec) (runtime.Container, error) {
+			if spec.WorkspaceID == w.ID && spec.Generation == op.Target {
+				return runtime.Container{ID: "running-candidate", State: "running"}, nil
+			}
+			return runtime.Container{ID: "stopped-container", State: "exited"}, nil
+		},
+		sync: func(id string, keys []string) error {
+			if id != "running-candidate" || !slices.Equal(keys, []string{sshTestKey}) {
+				return fmt.Errorf("synced keys %v to %s", keys, id)
+			}
+			writes++
+			return nil
+		},
+	}
+	c := &Control{Store: db, Engine: engine}
+	if err := c.SyncSSHKeys(ctx); err != nil || writes != 1 {
+		t.Fatalf("key copies = %d, error = %v", writes, err)
 	}
 }

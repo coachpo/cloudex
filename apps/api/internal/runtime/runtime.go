@@ -22,21 +22,15 @@ type Spec struct {
 	WorkspaceID, Image string
 	Generation         int
 	CPU, Memory        int64
-	SSH                *SSHSpec
-}
-
-type SSHSpec struct {
-	Network  string
-	Revision string
-	Keys     []string
+	SSHNetwork         string
 }
 
 type Container struct {
+	ImageDigests []string              `json:"image_digests"`
 	ID           string                `json:"id"`
 	Name         string                `json:"name"`
 	Image        string                `json:"image"`
 	ImageID      string                `json:"image_id"`
-	ImageDigests []string              `json:"image_digests"`
 	State        string                `json:"state"`
 	PID          int                   `json:"pid"`
 	ExitCode     int                   `json:"exit_code"`
@@ -47,7 +41,6 @@ type Container struct {
 	EnvNames     []string              `json:"env_names"`
 	Labels       map[string]string     `json:"labels"`
 	NetworkIPs   map[string]netip.Addr `json:"-"`
-	SSHRevision  string                `json:"-"`
 }
 
 type Mount struct {
@@ -105,6 +98,7 @@ type Engine interface {
 	Purge(ctx context.Context, workspaceID string, includeSSHHostKey bool) error
 	Run(context.Context, string, Exec) (int, error)
 	SSHHostKey(context.Context, string) (string, error)
+	SyncAuthorizedKeys(context.Context, string, []string) error
 	Terminal(context.Context, string) (Terminal, error)
 	Logs(context.Context, string, io.Writer) error
 	Metrics(context.Context, string) (Metrics, error)

@@ -12,9 +12,11 @@
 | 默认镜像和接入地址 | [控制面设置](../apps/api/internal/httpapi/settings.go) |
 | Host 登记、凭据续发、调度状态、盘点、容量和并发 | [Host 接口](../apps/api/internal/httpapi/hosts.go)与[Host 状态](../apps/api/internal/store/hosts.go) |
 | Workspace 创建、放置、操作回执、历史、日志、指标与 Git | [Workspace 接口](../apps/api/internal/httpapi/workspaces.go)与[生命周期契约](workspace-lifecycle.md) |
-| 公钥替换与连接信息 | [公钥接口](../apps/api/internal/httpapi/ssh.go)与[SSH 接入契约](workspace-access.md#ssh-接入信息) |
+| `GET/PUT /settings/ssh-keys` 和 `GET /workspaces/{id}/access` | [公钥接口](../apps/api/internal/httpapi/ssh.go)与[SSH 接入契约](workspace-access.md#ssh-接入信息) |
 
 首次初始化成功即建立会话。修改账号须验证当前密码，留空新密码可保留原密码。成功后旧会话失效，调用者须接受响应中的新 Cookie。[账号操作](operations.md#管理员账号)
+
+SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤销全部公钥。Workspace 的 Access 接口提供连接信息及是否配置公钥。在线 Host 下发失败时，返回 `SSH_KEY_SYNC_FAILED`，已保存的公钥列表仍用于 Gateway 鉴权。
 
 SSH 主机名和 Agent 公开地址一起提交，空字符串清除对应设置。SSH 配置在主机名为空时使用绑定地址，新签发的注册材料使用当前 Agent 公开地址。默认工作镜像的修改立即适用于模板和新建的 Workspace。Host 可以报告多个镜像的放置就绪状态，实际 Docker 镜像清单另行查询。[默认工作镜像](operations.md#默认工作镜像)
 

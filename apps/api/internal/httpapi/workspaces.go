@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/coachpo/cloudex/apps/api/internal/control"
-	"github.com/coachpo/cloudex/apps/api/internal/remote"
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -68,8 +67,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 			MemoryBytes int64 `json:"memory_bytes"`
 			Disk        int64 `json:"disk_bytes"`
 		} `json:"resources"`
-		AutoStart     *bool    `json:"auto_start"`
-		SSHPublicKeys []string `json:"ssh_public_keys"`
+		AutoStart *bool `json:"auto_start"`
 	}
 	if !parse(w, r, &in, false) {
 		return
@@ -155,17 +153,9 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		bad(w, r, "Provide an Idempotency-Key of 1–128 characters.")
 		return
 	}
-	ssh, e := remote.Keys(in.SSHPublicKeys)
-	if e != nil {
-		bad(w, r, e.Error())
-		return
-	}
 	metadata := []any{"create", in.Name, in.Template, in.Repository.URL, in.Repository.Branch, in.Resources, desired, in.Placement.HostID}
 	if credential != nil {
 		metadata = append(metadata, credential.Username)
-	}
-	if len(ssh) > 0 {
-		metadata = append(metadata, ssh)
 	}
 	settings, e := s.Store.Settings(r.Context())
 	if e != nil {
@@ -174,7 +164,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	ws := store.Workspace{ID: store.ID(), Name: in.Name, Image: settings.WorkspaceImage, RepoURL: in.Repository.URL, Branch: in.Repository.Branch,
 		CPU: in.Resources.CPU, Memory: in.Resources.Memory, Desired: desired, HostID: in.Placement.HostID, Disk: in.Resources.Disk}
-	o, e := s.Store.Create(r.Context(), ws, key, fingerprint(metadata), ssh, credential)
+	o, e := s.Store.Create(r.Context(), ws, key, fingerprint(metadata), credential)
 	if e != nil {
 		failure(w, r, e)
 		return

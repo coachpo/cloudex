@@ -28,5 +28,5 @@ func (d *Docker) ApplyCodexConfig(ctx context.Context, s Spec, id string, config
 	if config.AuthJSON != "" {
 		files = append(files, workspaceFile{"auth.json", config.AuthJSON, 0600})
 	}
-	return d.copyWorkspaceFiles(ctx, id, "/home/coder/.codex", files)
+	return d.copyWorkspaceFiles(ctx, id, "/home/coder/.codex", files, 10001)
 }

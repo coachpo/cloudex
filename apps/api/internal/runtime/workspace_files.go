@@ -34,26 +34,26 @@ type workspaceFile struct {
 	mode          int64
 }
 
-func (d *Docker) copyWorkspaceFiles(ctx context.Context, id, directory string, files []workspaceFile) error {
+func (d *Docker) copyWorkspaceFiles(ctx context.Context, id, directory string, files []workspaceFile, owner int) error {
 	var archive bytes.Buffer
-	if err := writeWorkspaceFiles(&archive, files); err != nil {
+	if err := writeWorkspaceFiles(&archive, files, owner); err != nil {
 		return err
 	}
 	// CopyUIDGID would override the archive ownership with the container's
-	// configured user, which is root for SSH-enabled Workspaces.
+	// configured user, which is root for Workspace containers.
 	_, err := d.cli.CopyToContainer(ctx, id, client.CopyToContainerOptions{
 		DestinationPath: directory, Content: &archive,
 	})
 	return err
 }
 
-func writeWorkspaceFiles(dst io.Writer, files []workspaceFile) error {
+func writeWorkspaceFiles(dst io.Writer, files []workspaceFile, owner int) error {
 	modified := time.Now()
 	w := tar.NewWriter(dst)
 	for _, file := range files {
 		if err := w.WriteHeader(&tar.Header{
 			Name: file.name, Typeflag: tar.TypeReg, Mode: file.mode, ModTime: modified,
-			Size: int64(len(file.content)), Uid: 10001, Gid: 10001,
+			Size: int64(len(file.content)), Uid: owner, Gid: owner,
 		}); err != nil {
 			return err
 		}

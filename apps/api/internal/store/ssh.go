@@ -3,23 +3,26 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"slices"
 )
 
-// Serialize final admission with authorization writes and lifecycle enqueue.
-// The caller bounds accept; WorkspaceSSH releases its transaction first.
+// Serialize final admission with key replacement and lifecycle changes.
 func (s *Store) AdmitSSH(ctx context.Context, id, key string, generation int, accept func() error) error {
-	unlock, err := s.admission.lock(ctx, id)
+	unlock, err := s.LockWorkspace(ctx, id)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	w, a, busy, err := s.WorkspaceSSH(ctx, id)
+	s.sshAdmission.RLock()
+	defer s.sshAdmission.RUnlock()
+	w, _, err := s.ReadyContainer(ctx, id)
 	if err != nil {
 		return err
 	}
-	if busy || w.Observed != "running" || w.Generation != generation || !a.Enabled || !slices.Contains(a.Keys, key) {
+	allowed, err := s.HasSSHKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if !allowed || w.Generation != generation {
 		return ErrBusy
 	}
 	if err := ctx.Err(); err != nil {
@@ -28,102 +31,47 @@ func (s *Store) AdmitSSH(ctx context.Context, id, key string, generation int, ac
 	return accept()
 }
 
-type SSHAccess struct {
-	Enabled bool
-	Keys    []string
-}
-
-func readSSH(ctx context.Context, tx *sql.Tx, id string) (a SSHAccess, err error) {
-	a.Keys = []string{}
-	err = tx.QueryRowContext(ctx, `SELECT enabled FROM workspace_access WHERE workspace_id=?`, id).Scan(&a.Enabled)
-	if errors.Is(err, sql.ErrNoRows) {
-		return a, nil
-	}
-	if err != nil {
-		return a, err
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT public_key FROM ssh_public_keys WHERE workspace_id=? ORDER BY public_key`, id)
-	a.Keys, err = collect(rows, err, func(r scanner) (string, error) { var key string; e := r.Scan(&key); return key, e })
-	return
-}
-
-func (s *Store) WorkspaceSSH(ctx context.Context, id string) (w Workspace, a SSHAccess, busy bool, err error) {
-	err = s.tx(ctx, func(tx *sql.Tx) error {
-		var e error
-		w, a, busy, e = workspaceSSH(ctx, tx, id)
-		return e
+func (s *Store) SSHKeys(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT public_key FROM ssh_public_keys ORDER BY public_key`)
+	return collect(rows, err, func(r scanner) (string, error) {
+		var key string
+		err := r.Scan(&key)
+		return key, err
 	})
-	return
 }
 
-func workspaceSSH(ctx context.Context, tx *sql.Tx, id string) (w Workspace, a SSHAccess, busy bool, err error) {
-	w, err = findWorkspace(ctx, tx, id)
-	if err != nil {
-		return
-	}
-	a, err = readSSH(ctx, tx, id)
-	if err != nil {
-		return
-	}
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE workspace_id=? AND status IN ('queued','running'))`, id).Scan(&busy)
-	return
+func (s *Store) HasSSHKey(ctx context.Context, key string) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ssh_public_keys WHERE public_key=?)`, key).Scan(&allowed)
+	return allowed, err
 }
-func writeSSH(ctx context.Context, tx *sql.Tx, id string, keys []string) error {
-	if len(keys) == 0 {
-		_, err := tx.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id=?`, id)
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_access VALUES(?,1)
-  ON CONFLICT(workspace_id) DO UPDATE SET enabled=1`, id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM ssh_public_keys WHERE workspace_id=?`, id); err != nil {
-		return err
-	}
-	for _, key := range keys {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO ssh_public_keys VALUES(?,?)`, id, key); err != nil {
+
+func (s *Store) SetSSHKeys(ctx context.Context, keys []string) error {
+	s.sshAdmission.Lock()
+	defer s.sshAdmission.Unlock()
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM ssh_public_keys`); err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, key := range keys {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO ssh_public_keys VALUES(?)`, key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-// Save desired authorization and enqueue replacement of the container's
-// authorized_keys snapshot in the same transaction.
-func (s *Store) SetSSH(ctx context.Context, id string, keys []string, key, hash string) (o Operation, err error) {
-	unlock, err := s.admission.lock(ctx, id)
-	if err != nil {
-		return o, err
-	}
-	defer unlock()
-	err = s.tx(ctx, func(tx *sql.Tx) error {
-		var e error
-		o, e = existingOperation(ctx, tx, key, hash)
-		if !errors.Is(e, ErrMissing) {
-			return e
-		}
-		w, e := findWorkspace(ctx, tx, id)
-		if e != nil {
-			return e
-		}
-		if e = checkIdle(ctx, tx, id); e != nil {
-			return e
-		}
-		if e = writeSSH(ctx, tx, id, keys); e != nil {
-			return e
-		}
-		o, e = insertOp(ctx, tx, w, "rebuild", w.Generation+1, false, key, hash)
-		if e != nil {
-			return e
-		}
-		if e = reacquireReservation(ctx, tx, w, o); e != nil {
-			return e
-		}
-		o.ApplySSH = true
-		_, e = tx.ExecContext(ctx, `UPDATE operations SET apply_ssh=1 WHERE id=?`, o.ID)
-		return e
+// SSHSyncGenerations includes the candidate of a lifecycle operation that
+// may have started Docker before publishing the new generation.
+func (s *Store) SSHSyncGenerations(ctx context.Context, id string) ([]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT generation FROM workspaces WHERE id=?1 AND deleted_at IS NULL AND generation>0
+ UNION SELECT target_generation FROM operations WHERE workspace_id=?1 AND status IN ('queued','running') AND target_generation>0`, id)
+	return collect(rows, err, func(r scanner) (int, error) {
+		var generation int
+		err := r.Scan(&generation)
+		return generation, err
 	})
-	return
 }
 
 func (s *Store) GatewayIdentity(ctx context.Context, candidate []byte) (sealed []byte, err error) {

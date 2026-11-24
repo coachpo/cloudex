@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -32,8 +33,9 @@ type executor interface {
 }
 
 type Store struct {
-	db        *sql.DB
-	admission workspaceGates
+	db           *sql.DB
+	admission    workspaceGates
+	sshAdmission sync.RWMutex
 }
 
 func ID() string { var b [16]byte; rand.Read(b[:]); return hex.EncodeToString(b[:]) }

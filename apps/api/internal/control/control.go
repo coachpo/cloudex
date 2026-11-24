@@ -83,7 +83,6 @@ func spec(w store.Workspace, gen int) runtime.Spec {
 	return runtime.Spec{WorkspaceID: w.ID, Image: w.Image, Generation: gen, CPU: w.CPU, Memory: w.Memory}
 }
 
-var errSSHRebuildRequired = errors.New("SSH settings changed; rebuild before starting")
 var errStartUnverified = errors.New("verify started container")
 
 // A rejection fails a Start or Stop without marking the Workspace as broken:
@@ -173,19 +172,12 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 		}
 	}()
 	target := spec(w, o.Target)
+	target.SSHNetwork = c.SSH.Network
 	inspect := func() (runtime.Container, error) {
 		if o.Type == "start" {
 			return c.Inspect(ctx, w)
 		}
 		return engine.Inspect(ctx, target)
-	}
-	switch o.Type {
-	case "create", "rebuild", "reset", "start":
-		_, a, _, e := c.Store.WorkspaceSSH(ctx, w.ID)
-		if e != nil {
-			return "", nil, e
-		}
-		target.SSH = c.sshSpec(a)
 	}
 	switch o.Type {
 	case "delete":
@@ -233,31 +225,25 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 			if ci.State == "paused" {
 				return "", nil, store.ErrWorkspacePaused
 			}
-			expected := ""
-			if target.SSH != nil {
-				expected = target.SSH.Revision
-			}
-			if ci.SSHRevision != expected {
-				verifyStart = false
-				return "", nil, errSSHRebuildRequired
-			}
 			w.Desired = "running"
-			if !verifyStart || ci.State != "running" {
+			e = c.syncContainerSSHKeys(ctx, engine, w.ID, ci.ID, func() error {
+				if verifyStart && ci.State == "running" {
+					return nil
+				}
 				if !startRecorded {
 					if e := c.Store.OpPhase(ctx, o.ID, startMayHaveRun); e != nil {
-						return "", nil, e
+						return e
 					}
 				}
 				reject = false // Docker now decides the outcome.
-				if e = engine.Start(ctx, ci.ID); e != nil {
-					verifyStart = verifyStart || errors.Is(e, runtime.ErrStartOutcomeUnknown)
-					return "", nil, e
-				}
+				return engine.Start(ctx, ci.ID)
+			})
+			if e != nil {
+				verifyStart = verifyStart || errors.Is(e, runtime.ErrStartOutcomeUnknown)
+				return "", nil, e
 			}
 			verifyStart = true
-			if target.SSH != nil {
-				e = c.waitForSSH(ctx, engine, ci.ID)
-			}
+			e = c.waitForSSH(ctx, engine, ci.ID)
 		} else {
 			e = engine.Stop(ctx, ci.ID)
 		}
@@ -289,15 +275,16 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 				return "", nil, e
 			}
 		}
-		if ci.State != "running" {
-			if e = engine.Start(ctx, ci.ID); e != nil {
-				return "", nil, e
+		if e = c.syncContainerSSHKeys(ctx, engine, w.ID, ci.ID, func() error {
+			if ci.State == "running" {
+				return nil
 			}
+			return engine.Start(ctx, ci.ID)
+		}); e != nil {
+			return "", nil, e
 		}
-		if target.SSH != nil {
-			if e = c.waitForSSH(ctx, engine, ci.ID); e != nil {
-				return "", nil, e
-			}
+		if e = c.waitForSSH(ctx, engine, ci.ID); e != nil {
+			return "", nil, e
 		}
 		var stderr capped
 		code, e := engine.Run(ctx, ci.ID, runtime.Exec{Args: []string{"workspace-control", "init", w.RepoURL, w.Branch}, Dir: "/workspace", Stderr: &stderr})
@@ -443,18 +430,15 @@ func (c *Control) reconcileWorkspace(ctx context.Context, w store.Workspace) err
 }
 
 func (c *Control) readyAfterStart(ctx context.Context, w store.Workspace, info runtime.Container) bool {
-	_, access, busy, err := c.Store.WorkspaceSSH(ctx, w.ID)
-	if err != nil || busy {
+	if _, ok := c.gatewayRoute(info); !ok {
 		return false
 	}
-	if !access.Enabled {
-		return info.SSHRevision == ""
-	}
-	if _, ok := c.gatewayRoute(info, access); !ok {
+	engine := c.EngineFor(w.HostID)
+	if _, err := engine.SSHHostKey(ctx, info.ID); err != nil {
 		return false
 	}
-	_, err = c.EngineFor(w.HostID).SSHHostKey(ctx, info.ID)
-	return err == nil
+	// A delayed Docker Start may have missed a key update while stopped.
+	return c.syncContainerSSHKeys(ctx, engine, w.ID, info.ID, nil) == nil
 }
 
 const outputLimit = 256 * 1024

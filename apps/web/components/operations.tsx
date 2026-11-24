@@ -34,13 +34,13 @@ export function Operations({ rows, names, canCancel = false }: {rows: Operation[
   if (!rows.length) return <Empty>{t("noOperations")}</Empty>;
   return <>
     <ol className="operations">{rows.map(o => <li key={o.id}>
-      <div className="op-row"><strong>{o.apply_ssh ? t("applySshSettings") : operationName(t, o.type)}
+      <div className="op-row"><strong>{operationName(t, o.type)}
         {names && <span className="muted"> · {names.has(o.workspace_id) ?
           <Link className="link" href={"/workspaces/" + o.workspace_id}>{names.get(o.workspace_id)}</Link> :
           <code>{o.workspace_id.slice(0,8)}</code>}</span>}</strong>
         <Status state={o.status}/></div>
       <div className="op-row muted small"><span>{o.target_generation > 0 ? t("generationNumber", { number: o.target_generation.toLocaleString(locale) }) + " · " : ""}{stamp(locale, o.created_at)}</span>
-        {canCancel && active(o.status) && o.status === "queued" && o.attempts === 0 && !o.apply_ssh &&
+        {canCancel && active(o.status) && o.status === "queued" && o.attempts === 0 &&
           <Button variant="ghost" size="xs" disabled={cancel.isPending} onClick={() => cancel.mutate(o)}>{t("cancel")}</Button>}
       </div>
       {o.error && <p className="op-error small">{o.error}</p>}

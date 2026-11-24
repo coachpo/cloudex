@@ -59,7 +59,6 @@ CREATE TABLE operations (
   error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   finished_at TEXT,
-  apply_ssh INTEGER NOT NULL DEFAULT 0 CHECK (apply_ssh IN (0, 1)),
   host_id TEXT REFERENCES host_nodes(id),
   retry_after INTEGER NOT NULL DEFAULT 0,
   reacquired_reservation INTEGER NOT NULL DEFAULT 0 CHECK (reacquired_reservation IN (0,1))
@@ -68,16 +67,7 @@ CREATE UNIQUE INDEX one_operation ON operations(workspace_id) WHERE status IN ('
 CREATE UNIQUE INDEX operation_key ON operations(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX operation_queue ON operations(status,created_at);
 
-CREATE TABLE workspace_access (
-  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
-  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
-);
-
-CREATE TABLE ssh_public_keys (
-  workspace_id TEXT NOT NULL REFERENCES workspace_access(workspace_id) ON DELETE CASCADE,
-  public_key TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, public_key)
-);
+CREATE TABLE ssh_public_keys (public_key TEXT PRIMARY KEY);
 
 CREATE TABLE host_nodes (
   id TEXT PRIMARY KEY,

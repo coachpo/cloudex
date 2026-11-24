@@ -118,7 +118,7 @@ func TestResetAdminClearsAuthenticationWithoutChangingBusinessData(t *testing.T)
 	op, err := db.Create(ctx, store.Workspace{
 		ID: store.ID(), Name: "Existing workspace", Image: "test", Branch: "main",
 		Desired: "stopped", CPU: 1000, Memory: 512,
-	}, "", "", nil, nil)
+	}, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

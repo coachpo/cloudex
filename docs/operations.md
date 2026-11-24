@@ -69,7 +69,7 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 
 跨机器访问时，Gateway 可绑定私网或 VPN 地址。使用默认回环地址和端口时，在客户端运行 `ssh -N -L 2222:127.0.0.1:2222 user@docker-host`，保持隧道开启。客户端需要单独的 Gateway 地址时，在 **设置 → 接入地址** 填写 **SSH 主机名**。
 
-1. 创建 Workspace 时填入本机 OpenSSH 公钥，每行一把。已有 Workspace 在 **Access** 修改公钥并确认重建。清空公钥后重建可关闭 SSH。
+1. 在 **设置 → SSH 公钥** 填入本机 OpenSSH 公钥，每行一把。保存后，公钥立即用于新连接。可在同一处移除公钥。
 2. 启动并等待 **Gateway ready**。将 **Copy known_hosts entries** 的两条公钥加入本机 `~/.ssh/known_hosts`，再把 **Copy SSH config** 的两个 Host 块放在 `~/.ssh/config` 的通用 `Host *` 规则之前。使用非默认私钥时，为两个 Host 块填写同一 `IdentityFile`，或使用 SSH agent。
 3. 运行 `ssh <alias>` 验证完整链路。需要 Codex 时在远端执行 `command -v codex`。尚未登录可运行 `codex login --device-auth`，设备码登录须由账户或组织允许。[Codex 认证说明](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)
 4. 选择 **Add host in Codex Desktop**，或在桌面应用的 **Settings → Connections** 添加 SSH 别名，打开 `/workspace/project`。Desktop 使用远端 CLI 的登录并启动自己的 App Server。SSH、终端和 Desktop 共用工作树，避免同时编辑同一文件。[Codex Remote SSH 指南](https://learn.chatgpt.com/docs/remote-connections#connect-to-an-ssh-host)
@@ -84,7 +84,7 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 
 | 操作 | 项目卷 | 已有的 Workspace SSH 主机密钥 | 容器内的 Codex 目录与 Git 凭据 |
 |---|---|---|---|
-| Stop / Start | 保留 | 保留 | 同一容器保留原内容。SSH 配置不符时须重建。 |
+| Stop / Start | 保留 | 保留 | 同一容器保留原内容。 |
 | Rebuild | 保留 | 保留 | 新容器按镜像和当前托管设置重新生成。 |
 | Reset project | 删除并重新初始化 | 保留 | 与 Rebuild 相同。 |
 | Delete workspace | 默认保留，可显式清除 | 默认保留，可显式清除 | 随容器删除。 |

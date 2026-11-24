@@ -53,7 +53,7 @@ func TestLifecycleWritesGitCredentialBeforeFirstStart(t *testing.T) {
 			if tc.kind == "create" {
 				w.ID, w.Name, w.RepoURL, w.Branch = store.ID(), "private", repo, branch
 				var err error
-				create, err = db.Create(ctx, w, "", "", nil, &credential)
+				create, err = db.Create(ctx, w, "", "", &credential)
 				if err != nil {
 					t.Fatal(err)
 				}

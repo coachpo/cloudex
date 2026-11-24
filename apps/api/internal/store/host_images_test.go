@@ -45,7 +45,7 @@ func TestDesiredWorkspaceImagesIncludeOnlyCurrentDefaultAndLiveWorkspaces(t *tes
 	for _, image := range []string{"workspace:z", next, "workspace:z", "workspace:deleted"} {
 		id := ID()
 		w := Workspace{ID: id, Name: id, Image: image, Branch: "main", Desired: "stopped", CPU: 1000, Memory: 1024}
-		if _, err := s.Create(ctx, w, "", "", nil, nil); err != nil {
+		if _, err := s.Create(ctx, w, "", "", nil); err != nil {
 			t.Fatal(err)
 		}
 		if image == "workspace:deleted" {
@@ -66,7 +66,7 @@ func TestRebuildAndResetReacquireUsingRecordedImage(t *testing.T) {
 			capacity := Resources{CPU: 4000, Memory: 4 * gib, Disk: 4 * gib}
 			h := connectedHost(t, s, "worker", capacity)
 			w := hostWorkspace(h, "old Workspace")
-			create, err := s.Create(ctx, w, "", "", nil, nil)
+			create, err := s.Create(ctx, w, "", "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

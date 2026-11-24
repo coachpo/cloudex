@@ -133,6 +133,11 @@ func (e *engine) Metrics(ctx context.Context, id string) (runtime.Metrics, error
 	return callValue[runtime.Metrics](ctx, e, request{Method: "metrics", ID: id})
 }
 
+func (e *engine) SyncAuthorizedKeys(ctx context.Context, id string, keys []string) error {
+	_, err := callValue[struct{}](ctx, e, request{Method: "sync-authorized-keys", ID: id, AuthorizedKeys: keys})
+	return err
+}
+
 func (e *engine) SSHHostKey(ctx context.Context, id string) (string, error) {
 	return callValue[string](ctx, e, request{Method: "ssh-host-key", ID: id})
 }

@@ -30,7 +30,6 @@ const instanceLabel = "cloud.instance"
 const workspaceLabel = "cloud.workspace_id"
 const hostLabel = "cloud.host_id"
 const generationLabel = "cloud.generation"
-const sshRevisionLabel = "cloud.ssh_revision"
 
 var sshContainerPort = network.MustParsePort(strconv.Itoa(remote.BackendPort) + "/tcp")
 
@@ -135,7 +134,7 @@ func (d *Docker) Inspect(ctx context.Context, s Spec) (Container, error) {
 
 func workspaceContainer(c container.InspectResponse) Container {
 	info := Container{ID: c.ID, Name: strings.TrimPrefix(c.Name, "/"), Image: c.Config.Image, ImageID: c.Image,
-		Mounts: []Mount{}, Networks: []string{}, EnvNames: []string{}, Labels: c.Config.Labels, SSHRevision: c.Config.Labels[sshRevisionLabel]}
+		Mounts: []Mount{}, Networks: []string{}, EnvNames: []string{}, Labels: c.Config.Labels}
 	if c.State != nil {
 		info.State, info.PID, info.ExitCode, info.StartedAt, info.FinishedAt = string(c.State.Status), c.State.Pid, c.State.ExitCode, c.State.StartedAt, c.State.FinishedAt
 	}
@@ -224,18 +223,6 @@ func (d *Docker) ensureVolume(ctx context.Context, name, id string) error {
 
 func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
 	current, e := d.Inspect(ctx, s)
-	revision := ""
-	if s.SSH != nil {
-		revision = s.SSH.Revision
-	}
-	if e == nil && current.SSHRevision != revision {
-		// A failed replacement may have left this generation unrecorded
-		// with an older authorized-key set or binding.
-		if e = d.Remove(ctx, s); e != nil {
-			return Container{}, e
-		}
-		e = ErrMissing
-	}
 	if !errors.Is(e, ErrMissing) {
 		return current, e
 	}
@@ -250,35 +237,24 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
 	labels[generationLabel] = strconv.Itoa(s.Generation)
 	init := true
 	pids := int64(512)
-	cfg := &container.Config{Image: s.Image, User: remote.User, WorkingDir: "/workspace", Labels: labels}
+	cfg := &container.Config{Image: s.Image, User: "0:0", WorkingDir: "/workspace", Labels: labels,
+		Cmd: []string{"/usr/local/bin/workspace-sshd"}, ExposedPorts: network.PortSet{sshContainerPort: {}},
+	}
 	host := &container.HostConfig{
 		Init: &init, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+		NetworkMode: container.NetworkMode(s.SSHNetwork),
+		// Only OpenSSH starts as root. Debian OpenSSH records PTY sessions through Linux audit.
+		CapAdd:        []string{"CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID", "SYS_CHROOT", "KILL", "AUDIT_WRITE"},
 		Resources:     container.Resources{NanoCPUs: s.CPU * 1_000_000, Memory: s.Memory * 1024 * 1024, PidsLimit: &pids},
 		LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}},
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 	}
-	targets := []string{workspaceMount}
-	if s.SSH != nil {
-		targets = append(targets, sshHostKeyMount)
-	}
-	for i, target := range targets {
+	for i, target := range []string{workspaceMount, sshHostKeyMount} {
 		name := names[i]
 		if err := d.ensureVolume(ctx, name, s.WorkspaceID); err != nil {
 			return Container{}, err
 		}
 		host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeVolume, Source: name, Target: target})
-	}
-	if ssh := s.SSH; ssh != nil {
-		cfg.User = "0:0"
-		cfg.Cmd = []string{"/usr/local/bin/workspace-sshd"}
-		cfg.ExposedPorts = network.PortSet{sshContainerPort: {}}
-		cfg.Env = []string{"CLOUDEX_SSH_AUTHORIZED_KEYS=" + strings.Join(ssh.Keys, "\n")}
-		labels[sshRevisionLabel] = ssh.Revision
-		host.NetworkMode = container.NetworkMode(ssh.Network)
-		// Only the SSH daemon starts as root. Its authenticated shell and
-		// every API exec run as the unprivileged workspace account.
-		// Debian OpenSSH records PTY login/logout through Linux audit.
-		host.CapAdd = []string{"CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID", "SYS_CHROOT", "KILL", "AUDIT_WRITE"}
 	}
 	_, e = d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{Name: d.containerName(s), Config: cfg, HostConfig: host})
 	if e != nil && !errdefs.IsConflict(e) {

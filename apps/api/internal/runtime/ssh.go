@@ -18,7 +18,7 @@ func (d *Docker) DialWorkspaceSSH(ctx context.Context, id string, address netip.
 	if err != nil {
 		return nil, err
 	}
-	if c.State == nil || c.State.Status != "running" || c.Config.Labels[sshRevisionLabel] == "" ||
+	if c.State == nil || c.State.Status != "running" ||
 		c.HostConfig == nil || len(c.HostConfig.PortBindings[sshContainerPort]) > 0 || c.NetworkSettings == nil ||
 		len(c.NetworkSettings.Ports[sshContainerPort]) > 0 || !address.Addr().Is4() || address.Port() != remote.BackendPort {
 		return nil, ErrOwnership
@@ -46,4 +46,17 @@ func (d *Docker) SSHHostKey(ctx context.Context, id string) (string, error) {
 		return "", e
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))), nil
+}
+
+func (d *Docker) SyncAuthorizedKeys(ctx context.Context, id string, keys []string) error {
+	if _, err := d.ownedContainer(ctx, id); err != nil {
+		return err
+	}
+	content := ""
+	if len(keys) > 0 {
+		content = strings.Join(keys, "\n") + "\n"
+	}
+	return d.copyWorkspaceFiles(ctx, id, "/run/cloudex-ssh", []workspaceFile{
+		{name: "authorized_keys", content: content, mode: 0644},
+	}, 0)
 }

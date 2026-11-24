@@ -45,6 +45,7 @@ type frame struct {
 }
 
 type request struct {
+	AuthorizedKeys    []string       `json:"authorized_keys,omitempty"`
 	Method            string         `json:"method"`
 	ID                string         `json:"id,omitempty"`
 	Spec              *runtime.Spec  `json:"spec,omitempty"`
@@ -66,16 +67,15 @@ type execRequest struct {
 
 type wireContainer struct {
 	runtime.Container
-	IPs      map[string]netip.Addr `json:"network_ips"`
-	Revision string                `json:"ssh_revision"`
+	IPs map[string]netip.Addr `json:"network_ips"`
 }
 
 func encodeContainer(c runtime.Container) wireContainer {
-	return wireContainer{Container: c, IPs: c.NetworkIPs, Revision: c.SSHRevision}
+	return wireContainer{Container: c, IPs: c.NetworkIPs}
 }
 
 func (c wireContainer) decode() runtime.Container {
-	c.Container.NetworkIPs, c.Container.SSHRevision = c.IPs, c.Revision
+	c.Container.NetworkIPs = c.IPs
 	return c.Container
 }
 

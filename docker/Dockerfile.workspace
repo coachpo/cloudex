@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --create-home --uid 10001 --user-group --shell /bin/bash --password '*' coder \
     && install -d -o coder -g coder -m 0700 /workspace /home/coder/.codex \
     && install -d -o coder -g coder -m 0700 /home/coder/.config /home/coder/.config/cloudex \
+    && install -d -m 0755 /run/cloudex-ssh \
     && git config --system credential.helper '!/usr/local/bin/workspace-control git-credential' \
     && touch /workspace/.cloudex-volume \
     && chown coder:coder /workspace/.cloudex-volume \
@@ -18,6 +19,5 @@ COPY docker/workspace-control.py /usr/local/bin/workspace-control
 COPY docker/workspace-sshd.sh /usr/local/bin/workspace-sshd
 COPY docker/sshd_config /etc/cloudex-sshd_config
 RUN chmod 0755 /usr/local/bin/workspace-control /usr/local/bin/workspace-sshd
-USER coder
 WORKDIR /workspace
-CMD ["sleep", "infinity"]
+CMD ["/usr/local/bin/workspace-sshd"]

@@ -73,7 +73,7 @@ export type WorkspaceCodexConfig = CodexConfigFields & {
 export type RepositoryCredentialStatus = { configured: boolean; username: string };
 export type Operation = {
   id: string; workspace_id: string; type: string; status: string; target_generation: number;
-  attempts: number; error: string; created_at: string; finished_at: string | null; apply_ssh: boolean;
+  attempts: number; error: string; created_at: string; finished_at: string | null;
 };
 export type Accepted = { workspace_id: string; operation_id: string; status: string };
 export type HostStatus = "enrolling" | "online" | "offline" | "degraded";
@@ -92,9 +92,9 @@ export type HostContainer = { id: string; name: string; image: string; state: st
 export type Image = { id: string; tags: string[] | null; size_bytes: number };
 export type Generation = { generation: number; id: string; image_id: string; status: string; created_at: string };
 export type WorkspaceAccess = {
-  enabled: boolean; status: "applying" | "disabled" | "stopped" | "paused" | "needs_rebuild" | "unavailable" | "ready";
+  has_public_keys: boolean; status: "applying" | "stopped" | "paused" | "unavailable" | "ready";
   message?: string; host: string; bind: string; port?: number; alias: string; user: string;
-  project_path: string; public_keys: string[]; fingerprint?: string; gateway_fingerprint?: string; known_hosts?: string; ssh_config?: string;
+  project_path: string; fingerprint?: string; gateway_fingerprint?: string; known_hosts?: string; ssh_config?: string;
 };
 export const publicKeyLines = (text: string) => text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
 export type Container = {

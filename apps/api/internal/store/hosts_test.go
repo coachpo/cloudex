@@ -144,7 +144,7 @@ func TestReservationsAtomicallyLimitConcurrentPlacement(t *testing.T) {
 			key := fmt.Sprintf("workspace-%d", i)
 			w := hostWorkspace(h, key)
 			w.Memory = 6144
-			o, err := s.Create(ctx, w, key, "hash", nil, nil)
+			o, err := s.Create(ctx, w, key, "hash", nil)
 			results <- create{o, w, key, err}
 		})
 	}
@@ -176,13 +176,13 @@ func TestReservationsAtomicallyLimitConcurrentPlacement(t *testing.T) {
 	if _, err := s.SetHostScheduling(ctx, h.ID, "cordoned"); err != nil {
 		t.Fatal(err)
 	}
-	if retry, err := s.Create(ctx, winner.w, winner.key, "hash", nil, nil); err != nil || retry.ID != winner.o.ID {
+	if retry, err := s.Create(ctx, winner.w, winner.key, "hash", nil); err != nil || retry.ID != winner.o.ID {
 		t.Fatalf("idempotent replay attempted a second reservation: %+v %v", retry, err)
 	}
-	if _, err := s.Create(ctx, winner.w, winner.key, "different hash", nil, nil); !errors.Is(err, ErrConflict) {
+	if _, err := s.Create(ctx, winner.w, winner.key, "different hash", nil); !errors.Is(err, ErrConflict) {
 		t.Fatalf("idempotency key reused with different request: %v", err)
 	}
-	if _, err := s.Create(ctx, hostWorkspace(h, "new"), "", "", nil, nil); !errors.Is(err, ErrHostCordoned) {
+	if _, err := s.Create(ctx, hostWorkspace(h, "new"), "", "", nil); !errors.Is(err, ErrHostCordoned) {
 		t.Fatalf("accepted placement while cordoned: %v", err)
 	}
 }
@@ -193,7 +193,7 @@ func TestHostDispatchSkipsOfflineAndAppliesPerHostConcurrency(t *testing.T) {
 	a := connectedHost(t, s, "A", capacity)
 	b := connectedHost(t, s, "B", capacity)
 	create := func(h Host, name string) Operation {
-		op, err := s.Create(ctx, hostWorkspace(h, name), "", "", nil, nil)
+		op, err := s.Create(ctx, hostWorkspace(h, name), "", "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -205,7 +205,7 @@ func TestHostDispatchSkipsOfflineAndAppliesPerHostConcurrency(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, "UPDATE host_nodes SET last_heartbeat_unix=0 WHERE id=?", b.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, hostWorkspace(b, "B offline"), "", "", nil, nil); !errors.Is(err, ErrHostOffline) {
+	if _, err := s.Create(ctx, hostWorkspace(b, "B offline"), "", "", nil); !errors.Is(err, ErrHostOffline) {
 		t.Fatalf("placed new workspace on expired host: %v", err)
 	}
 	claim := func(want Operation) Operation {
@@ -236,7 +236,7 @@ func TestHostDispatchSkipsOfflineAndAppliesPerHostConcurrency(t *testing.T) {
 	if _, err := s.SetHostScheduling(ctx, a1.HostID, "cordoned"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, hostWorkspace(a, "A while cordoned"), "", "", nil, nil); !errors.Is(err, ErrHostCordoned) {
+	if _, err := s.Create(ctx, hostWorkspace(a, "A while cordoned"), "", "", nil); !errors.Is(err, ErrHostCordoned) {
 		t.Fatalf("placed new workspace on a cordoned host: %v", err)
 	}
 	claim(a2)
@@ -283,7 +283,7 @@ func TestReservationSettlementRetainsDiskAndRecoversCleanFailure(t *testing.T) {
 		}
 	}
 	w := hostWorkspace(h, "retain disk")
-	create, err := s.Create(ctx, w, "", "", nil, nil)
+	create, err := s.Create(ctx, w, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestReservationSettlementRetainsDiskAndRecoversCleanFailure(t *testing.T) {
 	}
 
 	w = hostWorkspace(h, "clean failure")
-	create, err = s.Create(ctx, w, "", "", nil, nil)
+	create, err = s.Create(ctx, w, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestReservationSettlementRetainsDiskAndRecoversCleanFailure(t *testing.T) {
 	check(w, "released")
 
 	w = hostWorkspace(h, "cancel create")
-	create, err = s.Create(ctx, w, "", "", nil, nil)
+	create, err = s.Create(ctx, w, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

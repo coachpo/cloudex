@@ -2,7 +2,7 @@
 
 ## SSH 接入信息
 
-只有 `ready` 表示 Gateway 已核验当前容器的 sshd，并能提供两层主机公钥、指纹和 SSH 配置。客户端仍须自行验证网络与登录。SSH 客户端分别验证 Gateway 和容器的主机密钥。修改控制台的 SSH 主机名后，重新复制配置即可沿用原主机密钥别名。公钥按整份列表替换，空列表经重建后关闭 SSH。[状态与返回内容](../apps/api/internal/control/ssh.go) · [客户端连接步骤](operations.md#通过-ssh-连接-workspace)
+只有 `ready` 表示 Gateway 已核验当前容器的 sshd，并能提供两层主机公钥、指纹和 SSH 配置。客户端仍须自行验证网络与登录。SSH 客户端分别验证 Gateway 和容器的主机密钥。修改控制台的 SSH 主机名后，重新复制配置即可沿用原主机密钥别名。管理员在设置页统一替换公钥列表。Gateway 对新连接和新转发立即使用当前列表，容器内 sshd 读取下发的文件。离线 Host 重连后接收当前列表。撤销公钥不结束已建立的 SSH 会话。[状态与返回内容](../apps/api/internal/control/ssh.go) · [客户端连接步骤](operations.md#通过-ssh-连接-workspace)
 
 ## Web Terminal
 

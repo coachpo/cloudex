@@ -27,7 +27,7 @@ docker compose up -d --build
 
 1. 从本机打开[控制台](http://localhost:3000)。首次访问时创建管理员账号，之后用已有账号登录。
 2. 确认 **Hosts** 中目标 Host 在线。在 **New workspace** 选择 Host 和资源，创建空仓库或填写 HTTPS 仓库地址与分支。私有仓库可单独填写凭据。
-3. 在 **Web terminal** 打开 Shell。使用原生 SSH 或 Codex Desktop 时，按[连接步骤](docs/operations.md#通过-ssh-连接-workspace)验证两层主机密钥，再打开 `/workspace/project`。
+3. 在 **设置 → SSH 公钥** 添加客户端公钥，再按[连接步骤](docs/operations.md#通过-ssh-连接-workspace)验证两层主机密钥并打开 `/workspace/project`。也可以在 **Web terminal** 打开 Shell。
 
 ## 文档
 

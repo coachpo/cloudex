@@ -55,6 +55,11 @@ func (e *lifecycleEngine) container(id string) *runtime.Container {
 	panic("lifecycle used an unknown container: " + id)
 }
 
+func (e *lifecycleEngine) SyncAuthorizedKeys(context.Context, string, []string) error { return nil }
+func (e *lifecycleEngine) SSHHostKey(context.Context, string) (string, error) {
+	return "fixture-host-key", nil
+}
+
 func (e *lifecycleEngine) Start(_ context.Context, id string) error {
 	e.starts++
 	e.container(id).State = "running"

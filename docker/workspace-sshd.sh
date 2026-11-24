@@ -2,7 +2,6 @@
 set -eu
 umask 077
 
-test -n "${CLOUDEX_SSH_AUTHORIZED_KEYS:-}"
 mkdir -p /run/sshd /run/cloudex-ssh
 chmod 0700 /var/lib/cloudex-ssh
 host_key=/var/lib/cloudex-ssh/ssh_host_ed25519_key
@@ -15,8 +14,9 @@ if [ ! -f "$host_key" ]; then
     rmdir "$staging"
     trap - EXIT
 fi
-printf '%s\n' "$CLOUDEX_SSH_AUTHORIZED_KEYS" > /run/cloudex-ssh/authorized_keys
+if [ ! -f /run/cloudex-ssh/authorized_keys ]; then
+    touch /run/cloudex-ssh/authorized_keys
+fi
 chmod 0755 /run/cloudex-ssh /run/sshd
 chmod 0644 /run/cloudex-ssh/authorized_keys
-unset CLOUDEX_SSH_AUTHORIZED_KEYS
 exec /usr/sbin/sshd -D -e -f /etc/cloudex-sshd_config

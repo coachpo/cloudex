@@ -12,7 +12,7 @@ import { RemoteAccess } from "./remote-access";
 import { WorkspaceCodexSettings } from "./workspace-codex-settings";
 import { WorkspaceRepositoryCredential } from "./workspace-repository-credential";
 import { Empty, Facts, Notice, Status } from "./shared";
-import { hostName, localizeSSHMessage, statusName } from "@/lib/i18n";
+import { hostName, statusName } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { active, api, byteSize, hostPath, hostQuery, hostReady, stamp, workspaceState, wsPath, type Accepted, type Container, type Generation,
   type Git, type Metrics, type Operation, type Workspace, type WorkspaceAccess } from "@/lib/api";
@@ -32,7 +32,7 @@ export function WorkspaceDetails({id,view}: {id:string;view:string}) {
   const host=useQuery({...hostQuery(hostID),enabled:!!hostID});
   const o=useQuery(scoped<Operation[]>(id,"operations",1500));
   const access=useQuery(scoped<WorkspaceAccess>(id,"access",3500,
-    !!q.data && (view==="access" || workspaceState(q.data)==="stopped")));
+    !!q.data && view==="access"));
   const deletion=o.data?.find(op=>op.id===deleting);
   useEffect(()=>{if(deletion?.status==="succeeded"){
     client.invalidateQueries({queryKey:["workspaces"]});router.replace("/workspaces");
@@ -46,7 +46,6 @@ export function WorkspaceDetails({id,view}: {id:string;view:string}) {
   const reachable=!!host.data&&hostReady(host.data);
   const unreachable=!!host.data&&!reachable;
   const running=w.observed_state==="running"&&!busy&&reachable;
-  const canStart=reachable && access.isSuccess && (access.data.status==="stopped" || access.data.status==="disabled");
   const queued=(o:Accepted,kind:string)=>{if(kind==="delete")setDeleting(o.operation_id);};
   return <>
     <div className="title"><div><Link className="back link" href="/workspaces">{t("backWorkspaces")}</Link>
@@ -55,7 +54,7 @@ export function WorkspaceDetails({id,view}: {id:string;view:string}) {
       <div className="actions">
         {view!=="access"&&<Button asChild><Link href={wsPath(id)+"/access"}>{t("connectSsh")}</Link></Button>}
         <Lifecycle workspace={w} busy={busy} onQueued={queued}
-          startBlocked={!canStart}/>
+          startBlocked={!reachable}/>
       </div>
     </div>
     <nav className="tabbar" aria-label={t("workspaceViews")}>{views.map(([value,label])=>
@@ -67,17 +66,12 @@ export function WorkspaceDetails({id,view}: {id:string;view:string}) {
     {state==="paused" && reachable ? <p className="muted" role="status">{t("unpauseDocker")}</p> :
       w.error && <p className="notice" role="status"><b>{t("workspaceNeedsAttention")}</b> {w.error}</p>}
     {busy && o.data?.[0] && <p className="muted small" role="status">{t("lifecycleOperation")} {operationName(t, o.data[0].type)} · {statusName(t, o.data[0].status)}</p>}
-    {reachable && view!=="access" && state==="stopped" && access.data?.status==="needs_rebuild" &&
-      <p role="status" className="muted">{t("rebuildForSSHSettings")}</p>}
-    {reachable && view!=="access" && state==="stopped" && (access.isError || access.data?.status==="unavailable") &&
-      <Notice error={access.error ?? new Error(localizeSSHMessage(locale, access.data?.message || "") || t("sshVerificationFailed"))}
-        retry={()=>access.refetch()}/>}
     {view==="" && <Inspector workspace={w} running={running} reachable={reachable}>
       <section className="panel"><div className="section-head"><h2>{t("lifecycleHistory")}</h2></div>
         {o.error ? <Notice error={o.error} retry={()=>o.refetch()}/> : o.data ? <Operations rows={o.data} canCancel/> : <Empty>{t("loadingActivity")}</Empty>}
       </section>
     </Inspector>}
-    {view==="access" && <RemoteAccess id={id} busy={busy} query={access}/>}
+    {view==="access" && <RemoteAccess query={access}/>}
     {view==="terminal" && <><p className="muted"><Translation id="terminalLoginHint" values={{ command: <code>codex login --device-auth</code> }}/></p>
       {running ? <WorkspaceTerminal key={w.generation} id={id}/> : <section className="panel"><h2>{t("developmentTerminal")}</h2>
         <Empty>{unreachable?t("terminalHostUnavailable"):state==="paused"?t("terminalContainerPaused"):t("waitForWorkspaceStart")}</Empty></section>}</>}

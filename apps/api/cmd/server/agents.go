@@ -16,6 +16,7 @@ import (
 
 	"github.com/coachpo/cloudex/apps/api/internal/agentauth"
 	"github.com/coachpo/cloudex/apps/api/internal/agentlink"
+	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -30,7 +31,7 @@ type agentServices struct {
 	close  func()
 }
 
-func startAgentServices(ctx context.Context, db *store.Store, instance string, key cipher.AEAD) (agentServices, error) {
+func startAgentServices(ctx context.Context, db *store.Store, instance string, key cipher.AEAD, onReady func(context.Context, string, runtime.Engine)) (agentServices, error) {
 	if err := db.ExpireHostLease(ctx, ""); err != nil {
 		return agentServices{}, err
 	}
@@ -74,6 +75,7 @@ func startAgentServices(ctx context.Context, db *store.Store, instance string, k
 				slog.Warn("expire disconnected Host lease", "host", host, "error", err)
 			}
 		},
+		onReady,
 	)
 	// Agents ping every 20 s (cmd/host-agent); allow that without GOAWAY.
 	rpc := grpc.NewServer(grpc.Creds(negotiatedTLS{}),

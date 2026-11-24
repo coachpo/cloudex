@@ -244,7 +244,7 @@ func (a *executor) execute(ctx context.Context, peer *exchange, req request) (an
 			a.images = slices.Clone(req.Config.Images)
 		}
 		return nil, nil
-	case "ensure", "start", "stop", "remove", "purge", "apply-codex-config", "apply-git-credential":
+	case "ensure", "start", "stop", "remove", "purge", "apply-codex-config", "apply-git-credential", "sync-authorized-keys":
 		return a.mutate(ctx, req)
 	case "inspect", "artifacts-absent":
 		if req.Spec == nil {

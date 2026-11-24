@@ -43,7 +43,7 @@ func TestClaimOpUsesSmallerHostOperationLimit(t *testing.T) {
 			s, ctx := testStore(t), t.Context()
 			h := connectedHost(t, s, "worker", Resources{CPU: 3000, Memory: 3 * gib, Disk: 3 * gib})
 			for i := range 2 {
-				if _, err := s.Create(ctx, hostWorkspace(h, fmt.Sprintf("workspace %d", i)), "", "", nil, nil); err != nil {
+				if _, err := s.Create(ctx, hostWorkspace(h, fmt.Sprintf("workspace %d", i)), "", "", nil); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -50,7 +50,6 @@ type Operation struct {
 	Status      string  `json:"status"`
 	Target      int     `json:"target_generation"`
 	Purge       bool    `json:"purge"`
-	ApplySSH    bool    `json:"apply_ssh"`
 	Phase       int     `json:"-"`
 	Attempts    int     `json:"attempts"`
 	Error       string  `json:"error"`
@@ -59,7 +58,7 @@ type Operation struct {
 }
 
 const workspaceFields = "id,name,image,repo_url,branch,cpu_milli,memory_mb,desired_state,observed_state,paused,start_unverified,generation,error,updated_at,observation_version,assigned_host_id,disk_bytes"
-const operationFields = "id,workspace_id,type,status,target_generation,purge,apply_ssh,phase,attempts,error,created_at,finished_at,host_id"
+const operationFields = "id,workspace_id,type,status,target_generation,purge,phase,attempts,error,created_at,finished_at,host_id"
 const containerFields = "generation,docker_id,image_id,status,created_at,host_id"
 
 func scanWorkspace(r scanner) (w Workspace, err error) {
@@ -67,7 +66,7 @@ func scanWorkspace(r scanner) (w Workspace, err error) {
 	return
 }
 func scanOp(r scanner) (o Operation, err error) {
-	err = missing(r.Scan(&o.ID, &o.WorkspaceID, &o.Type, &o.Status, &o.Target, &o.Purge, &o.ApplySSH, &o.Phase, &o.Attempts, &o.Error, &o.CreatedAt, &o.FinishedAt, &o.HostID))
+	err = missing(r.Scan(&o.ID, &o.WorkspaceID, &o.Type, &o.Status, &o.Target, &o.Purge, &o.Phase, &o.Attempts, &o.Error, &o.CreatedAt, &o.FinishedAt, &o.HostID))
 	return
 }
 func scanContainer(r scanner) (c Container, err error) {
@@ -129,7 +128,7 @@ func insertOp(ctx context.Context, tx *sql.Tx, w Workspace, kind string, target 
 	return o, err
 }
 
-func (s *Store) Create(ctx context.Context, w Workspace, key, hash string, sshKeys []string, credential *RepositoryCredential) (o Operation, err error) {
+func (s *Store) Create(ctx context.Context, w Workspace, key, hash string, credential *RepositoryCredential) (o Operation, err error) {
 	checkPlacement := w.HostID != ""
 	if !checkPlacement {
 		w.HostID = LocalHostID
@@ -150,9 +149,6 @@ func (s *Store) Create(ctx context.Context, w Workspace, key, hash string, sshKe
 			return e
 		}
 		if e = insertReservation(ctx, tx, w); e != nil {
-			return e
-		}
-		if e = writeSSH(ctx, tx, w.ID, sshKeys); e != nil {
 			return e
 		}
 		if credential != nil {
@@ -334,9 +330,7 @@ func (s *Store) finishOp(ctx context.Context, o Operation, state string, c *Cont
 			if e := writeRepositoryCredential(ctx, tx, o.WorkspaceID, nil); e != nil {
 				return e
 			}
-			if _, e := tx.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id=?`, o.WorkspaceID); e != nil {
-				return e
-			}
+
 		}
 		if state == "deleted" || releaseCreate {
 			if e := resolveReservation(ctx, tx, o.WorkspaceID, state == "deleted" && !o.Purge); e != nil {
@@ -360,7 +354,7 @@ func (s *Store) CancelOp(ctx context.Context, id string) error {
 		var kind, workspaceID string
 		var reacquired bool
 		err := tx.QueryRowContext(ctx, `UPDATE operations SET status='cancelled',finished_at=?
- WHERE id=? AND status='queued' AND attempts=0 AND apply_ssh=0 RETURNING type,workspace_id,reacquired_reservation`, now(), id).Scan(&kind, &workspaceID, &reacquired)
+ WHERE id=? AND status='queued' AND attempts=0 RETURNING type,workspace_id,reacquired_reservation`, now(), id).Scan(&kind, &workspaceID, &reacquired)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrBusy
 		}
@@ -376,9 +370,7 @@ func (s *Store) CancelOp(ctx context.Context, id string) error {
 			if err := writeRepositoryCredential(ctx, tx, workspaceID, nil); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id=?`, workspaceID); err != nil {
-				return err
-			}
+
 			_, err = tx.ExecContext(ctx, `UPDATE workspaces SET desired_state='stopped',observed_state='deleted',deleted_at=?,updated_at=? WHERE id=?`, now(), now(), workspaceID)
 		}
 		return err
@@ -485,4 +477,16 @@ func (s *Store) AdmitTerminal(ctx context.Context, id string, generation int, op
 		return ErrBusy
 	}
 	return open()
+}
+
+func (s *Store) WorkspaceActivity(ctx context.Context, id string) (w Workspace, busy bool, err error) {
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		w, err = findWorkspace(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE workspace_id=? AND status IN ('queued','running'))`, id).Scan(&busy)
+	})
+	return
 }

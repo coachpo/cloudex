@@ -120,7 +120,7 @@ func TestAgentImageSetReconcilesIndependentlyOfLimitAndReadiness(t *testing.T) {
 		if _, err := db.Create(ctx, store.Workspace{
 			ID: store.ID(), Name: "old", Image: "workspace:old", Branch: "main",
 			Desired: "stopped", CPU: 100, Memory: 256,
-		}, "", "", nil, nil); err != nil {
+		}, "", "", nil); err != nil {
 			t.Fatal(err)
 		}
 		sync := agentConfigSync{db: db}
@@ -190,7 +190,7 @@ func startTestAgentServices(t *testing.T, ctx context.Context) agentServicesFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	services, err := startAgentServices(ctx, db, instance, key)
+	services, err := startAgentServices(ctx, db, instance, key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestAgentHeartbeatConfigure(t *testing.T) {
 	if _, err := fixture.db.Create(t.Context(), store.Workspace{
 		ID: store.ID(), Name: "old", Image: oldImage, Branch: "main",
 		Desired: "stopped", CPU: 100, Memory: 256,
-	}, "", "", nil, nil); err != nil {
+	}, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.db.SetWorkspaceImage(t.Context(), currentImage); err != nil {

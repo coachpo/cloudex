@@ -12,7 +12,7 @@ func TestRepositoryCredentialRemovedWithWorkspace(t *testing.T) {
 			w := Workspace{ID: ID(), Name: "private", Image: "fixture", Branch: "main", Desired: "running", CPU: 500, Memory: 512,
 				RepoURL: "https://git.example.test:8443/group/repo"}
 			credential := RepositoryCredential{Host: "git.example.test:8443", Username: "fixture", Token: "synthetic-git-token"}
-			op, err := s.Create(ctx, w, "", "", nil, &credential)
+			op, err := s.Create(ctx, w, "", "", &credential)
 			if err != nil {
 				t.Fatal(err)
 			}

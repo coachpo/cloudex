@@ -70,11 +70,11 @@ func testHub(t *testing.T, disconnected func(context.Context, string)) (*Hub, *h
 			return ctx.Err()
 		}
 		return nil
-	}, disconnected)
+	}, disconnected, nil)
 	return hub, server, heartbeats
 }
 
-func testHubWithHeartbeat(t *testing.T, heartbeat func(context.Context, string, Inventory, ConfigureAgent) error, disconnected func(context.Context, string)) (*Hub, *httptest.Server) {
+func testHubWithHeartbeat(t *testing.T, heartbeat func(context.Context, string, Inventory, ConfigureAgent) error, disconnected func(context.Context, string), onReady func(context.Context, string, runtime.Engine)) (*Hub, *httptest.Server) {
 	t.Helper()
 	hub := NewHub(func(ctx context.Context) (string, error) {
 		p, ok := grpcpeer.FromContext(ctx)
@@ -86,7 +86,7 @@ func testHubWithHeartbeat(t *testing.T, heartbeat func(context.Context, string, 
 			return "", errors.New("missing TLS identity")
 		}
 		return tlsInfo.State.PeerCertificates[0].Subject.CommonName, nil
-	}, heartbeat, disconnected)
+	}, heartbeat, disconnected, onReady)
 	rpc := grpc.NewServer()
 	hub.Register(rpc)
 	server := httptest.NewUnstartedServer(rpc)
@@ -160,7 +160,7 @@ func TestConfigureAgentReportsAppliedLimitAndRejectsStaleSession(t *testing.T) {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}, nil)
+	}, nil, nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	const host = "configurable"
@@ -315,7 +315,7 @@ func TestRuntimeStreamsUseTheAssignedHost(t *testing.T) {
 	hub, server, beats := testHub(t, nil)
 	target := netip.MustParseAddr("172.20.0.6")
 	remote := &fakeRuntime{
-		container: runtime.Container{ID: "remote-container", SSHRevision: "revision", NetworkIPs: map[string]netip.Addr{"private": target}},
+		container: runtime.Container{ID: "remote-container", NetworkIPs: map[string]netip.Addr{"private": target}},
 		start:     func(context.Context) error { return runtime.ErrStartOutcomeUnknown },
 		run: func(_ context.Context, exec runtime.Exec) (int, error) {
 			if !slices.Equal(exec.Args, []string{"workspace-control", "git"}) || exec.Dir != runtime.WorkDir {
@@ -339,7 +339,7 @@ func TestRuntimeStreamsUseTheAssignedHost(t *testing.T) {
 	defer cancel()
 	engine := hub.Engine("remote")
 	c, err := engine.Inspect(ctx, runtime.Spec{WorkspaceID: "one", Generation: 1})
-	if err != nil || c.ID != "remote-container" || c.SSHRevision != "revision" || c.NetworkIPs["private"] != target {
+	if err != nil || c.ID != "remote-container" || c.NetworkIPs["private"] != target {
 		t.Fatalf("inspect returned %#v, %v", c, err)
 	}
 	// Docker answered; the control plane verifies the start instead of
@@ -589,4 +589,54 @@ waiting:
 	}
 	expire <- struct{}{}
 	awaitHeartbeat(t, beats, "reconnecting")
+}
+
+type sshKeyRuntime struct {
+	runtime.Engine
+	sync func(string, []string) error
+}
+
+func (d sshKeyRuntime) SyncAuthorizedKeys(_ context.Context, id string, keys []string) error {
+	return d.sync(id, keys)
+}
+
+func TestReconnectSyncUsesCurrentAgent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	const host, container = "ssh-host", "running-container"
+	var keys atomic.Value
+	keys.Store("initial-public-key")
+	synced := make(chan error, 4)
+	hub, server := testHubWithHeartbeat(t, func(context.Context, string, Inventory, ConfigureAgent) error {
+		return nil
+	}, nil, func(ctx context.Context, id string, engine runtime.Engine) {
+		if id != host {
+			synced <- fmt.Errorf("unexpected Host %q", id)
+			return
+		}
+		synced <- engine.SyncAuthorizedKeys(ctx, container, []string{keys.Load().(string)})
+	})
+	connect := func(want string) func() {
+		t.Helper()
+		stop := startTestAgent(t, server, host, Agent{Engine: sshKeyRuntime{sync: func(id string, got []string) error {
+			if id != container || !slices.Equal(got, []string{want}) {
+				return fmt.Errorf("sync sent %v to %q, want %q on %q", got, id, want, container)
+			}
+			return nil
+		}}})
+		select {
+		case err := <-synced:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("Agent did not receive SSH keys after connecting")
+		}
+		return stop
+	}
+	stop := connect("initial-public-key")
+	stop()
+	hub.Disconnect(host)
+	keys.Store("updated-public-key")
+	connect("updated-public-key")
 }

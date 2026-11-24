@@ -230,6 +230,8 @@ func (a *executor) dockerMutation(ctx context.Context, req request) (any, error)
 		return nil, err
 	}
 	switch req.Method {
+	case "sync-authorized-keys":
+		return nil, a.Engine.SyncAuthorizedKeys(ctx, req.ID, req.AuthorizedKeys)
 	case "start":
 		return nil, a.Engine.Start(ctx, req.ID)
 	case "stop":

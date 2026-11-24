@@ -54,3 +54,7 @@ func (g *workspaceGates) lock(ctx context.Context, id string) (func(), error) {
 		return nil, ctx.Err()
 	}
 }
+
+func (s *Store) LockWorkspace(ctx context.Context, id string) (func(), error) {
+	return s.admission.lock(ctx, id)
+}

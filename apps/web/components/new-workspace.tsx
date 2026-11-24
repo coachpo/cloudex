@@ -1,6 +1,6 @@
 "use client";
 
-import { Translation, useT } from "@/components/i18n-provider";
+import { useT } from "@/components/i18n-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,7 +9,7 @@ import { hostName, statusName } from "@/lib/i18n";
 import { Empty, Notice } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
-import { APIError, canPlaceOnHost, change, GiB, hostListQuery, idempotencyKey, hostPlacementIssue, hostResourceFields, MiB, publicKeyLines, templatesQuery,
+import { APIError, canPlaceOnHost, change, GiB, hostListQuery, idempotencyKey, hostPlacementIssue, hostResourceFields, MiB, templatesQuery,
   type Accepted, type Host, type HostResources } from "@/lib/api";
 
 export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
@@ -56,7 +56,6 @@ export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
     const credential = username || token ? { username, token } : undefined;
     const body = {
       name:f.get("name"),template_id:template?.id,auto_start:f.has("auto"),
-      ssh_public_keys:publicKeyLines(String(f.get("ssh_public_keys")??"")),
       repository:{...repository, credential},
       placement:{type:"manual",host_id:host.id}, resources,
     };
@@ -103,10 +102,6 @@ export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
               }}/>}
             </FieldSet>
             <Field className="fields"><FieldLabel htmlFor="name">{t("workspaceName")}</FieldLabel><input className="field" id="name" name="name" maxLength={64} required placeholder={t("workspaceNameExample")}/></Field>
-            <Field className="fields"><FieldLabel htmlFor="ssh-public-keys">{t("sshPublicKeys")} <span className="muted">{t("optional")}</span></FieldLabel>
-              <textarea className="field" id="ssh-public-keys" name="ssh_public_keys" rows={3} spellCheck={false} maxLength={61440} aria-describedby="ssh-hint"/>
-              <p id="ssh-hint" className="form-note"><Translation id="sshKeySetupHint" values={{ file: <code>.pub</code> }}/></p>
-            </Field>
             <Field className="fields"><FieldLabel htmlFor="url">{t("repoUrl")} <span className="muted">{t("optional")}</span></FieldLabel>
               <input className="field" id="url" name="url" type="url" maxLength={1024} placeholder="https://…" aria-describedby="git-hint"/>
               <p id="git-hint" className="form-note">{t("repoUrlHint")}</p></Field>

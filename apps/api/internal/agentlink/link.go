@@ -22,6 +22,7 @@ const setupTimeout = 8 * time.Second
 // Hub dispatches calls to authenticated Host Agents. Call IDs are one-use
 // capabilities bound to the authenticated Host's current control connection.
 type Hub struct {
+	onReady      func(context.Context, string, runtime.Engine)
 	authenticate func(context.Context) (string, error)
 	heartbeat    func(context.Context, string, Inventory, ConfigureAgent) error
 	disconnected func(context.Context, string)
@@ -35,9 +36,9 @@ type Hub struct {
 // Call it asynchronously to let heartbeat processing continue during the exchange.
 type ConfigureAgent func(context.Context, AgentConfig) error
 
-func NewHub(authenticate func(context.Context) (string, error), heartbeat func(context.Context, string, Inventory, ConfigureAgent) error, disconnected func(context.Context, string)) *Hub {
+func NewHub(authenticate func(context.Context) (string, error), heartbeat func(context.Context, string, Inventory, ConfigureAgent) error, disconnected func(context.Context, string), onReady func(context.Context, string, runtime.Engine)) *Hub {
 	return &Hub{
-		authenticate: authenticate, heartbeat: heartbeat, disconnected: disconnected,
+		authenticate: authenticate, heartbeat: heartbeat, disconnected: disconnected, onReady: onReady,
 		sessions: make(map[string]*session), revokedAt: make(map[string]uint64),
 	}
 }
@@ -92,8 +93,10 @@ func (h *Hub) connect(s grpc.ServerStream) error {
 	}
 	h.sessions[hostID] = current
 	h.mu.Unlock()
+	var readyCallbacks sync.WaitGroup
 	defer func() {
 		cancel()
+		readyCallbacks.Wait()
 		// Finish expiring the old lease before a replacement can refresh it.
 		// The registry stays available to other Hosts during the write.
 		current.lease.Lock()
@@ -113,6 +116,7 @@ func (h *Hub) connect(s grpc.ServerStream) error {
 		h.mu.Unlock()
 	}()
 	bound := &engine{hub: h, host: hostID, session: current}
+	wasHealthy := false
 	for ctx.Err() == nil {
 		next, stop := context.WithTimeout(ctx, heartbeatTimeout)
 		f, err := control.recv(next)
@@ -137,6 +141,12 @@ func (h *Hub) connect(s grpc.ServerStream) error {
 		if err != nil {
 			return status.Error(codes.Unavailable, "host heartbeat could not be recorded")
 		}
+		healthy := inventory.Error == ""
+		if healthy && !wasHealthy && h.onReady != nil {
+			// The callback can use the bound Engine while heartbeats continue.
+			readyCallbacks.Go(func() { h.onReady(ctx, hostID, bound) })
+		}
+		wasHealthy = healthy
 	}
 	return nil
 }
