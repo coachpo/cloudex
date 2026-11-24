@@ -72,6 +72,7 @@ export type HostResources = { cpu_milli: number; memory_bytes: number; disk_byte
 export type Host = {
   id: string; name: string; status: HostStatus; last_seen: string | null;
   scheduling_state: HostScheduling; scheduling_version: number;
+  connection_type: "agent" | "ssh"; ssh_address?: string; ssh_user?: string; ssh_host_key?: string; connection_error?: string;
   agent_version: string; engine: string; os: string; arch: string; healthy: boolean;
   images: { image: string; ready: boolean }[]; max_operations: number; max_operations_target: number; reachable: boolean;
   running_containers: number; total_containers: number;

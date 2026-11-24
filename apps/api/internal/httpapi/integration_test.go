@@ -52,8 +52,12 @@ func newUninitializedTestAPI(t *testing.T, c *control.Control) testAPI {
 	if c.Key, e = cipher.NewGCM(block); e != nil {
 		t.Fatal(e)
 	}
-	h := (&Server{Control: c, Origin: testOrigin}).Handler(http.NotFoundHandler())
-	srv := httptest.NewServer(h)
+	return newTestServer(t, &Server{Control: c, Origin: testOrigin})
+}
+
+func newTestServer(t *testing.T, server *Server) testAPI {
+	t.Helper()
+	srv := httptest.NewServer(server.Handler(http.NotFoundHandler()))
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
 	return testAPI{t, srv, &http.Client{Jar: jar, Timeout: 25 * time.Second}}
@@ -330,10 +334,8 @@ func (a testAPI) opDone(id string) {
 		return o.Status == "succeeded"
 	})
 }
-func (a testAPI) shell(path string, cols, rows int, command, marker string) string {
+func (a testAPI) openTerminal(ctx context.Context, path string) *websocket.Conn {
 	a.t.Helper()
-	ctx, cancel := context.WithTimeout(a.t.Context(), 10*time.Second)
-	defer cancel()
 	u, _ := url.Parse(a.server.URL)
 	h := http.Header{"Origin": {testOrigin}}
 	for _, ck := range a.client.Jar.Cookies(u) {
@@ -343,6 +345,14 @@ func (a testAPI) shell(path string, cols, rows int, command, marker string) stri
 	if e != nil {
 		a.t.Fatalf("terminal dial: %v (%v)", e, res)
 	}
+	return conn
+}
+
+func (a testAPI) shell(path string, cols, rows int, command, marker string) string {
+	a.t.Helper()
+	ctx, cancel := context.WithTimeout(a.t.Context(), 10*time.Second)
+	defer cancel()
+	conn := a.openTerminal(ctx, path)
 	defer conn.CloseNow()
 	resize, _ := json.Marshal(map[string]any{"type": "resize", "cols": cols, "rows": rows})
 	for _, m := range []struct {
@@ -351,7 +361,7 @@ func (a testAPI) shell(path string, cols, rows int, command, marker string) stri
 	}{
 		{websocket.MessageText, resize}, {websocket.MessageBinary, []byte(command + "\r")},
 	} {
-		if e = conn.Write(ctx, m.kind, m.data); e != nil {
+		if e := conn.Write(ctx, m.kind, m.data); e != nil {
 			a.t.Fatal(e)
 		}
 	}
@@ -431,8 +441,11 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 					t.Error(e)
 				}
 			}
-			if e := d.Purge(end, created.Workspace, true); e != nil {
-				t.Error(e)
+			// This scenario can exit either side of its single Reset.
+			for revision := 0; revision <= 1; revision++ {
+				if e := d.Purge(end, runtime.Spec{WorkspaceID: created.Workspace, ProjectVolumeRevision: revision}, true); e != nil {
+					t.Error(e)
+				}
 			}
 		})
 		a.opDone(created.Op)

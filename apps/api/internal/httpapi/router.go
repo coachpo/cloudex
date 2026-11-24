@@ -25,6 +25,7 @@ type Server struct {
 	Origin           string
 	AgentCertificate string
 	DisconnectAgent  func(string)
+	SSHHosts         sshHostConnections
 	hostModeMu       sync.Mutex
 	hostModeChanges  map[string]*hostModeChange
 }
@@ -53,10 +54,14 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 			r.Get("/templates", s.templates)
 			r.Get("/hosts", s.hosts)
 			r.Post("/hosts", s.addHost)
+			r.Post("/hosts/ssh/probe", s.probeSSHHost)
+			r.Post("/hosts/ssh", s.saveSSHHost)
 			r.Route("/hosts/{host}", func(r chi.Router) {
 				r.Get("/", s.getHost)
 				r.Put("/mode", s.setHostMode)
 				r.Post("/enrollment", s.renewHostEnrollment)
+				r.Put("/ssh", s.saveSSHHost)
+				r.Post("/ssh/reconnect", s.reconnectSSHHost)
 				r.Get("/capacity", s.hostCapacity)
 				r.Put("/capacity", s.setHostCapacity)
 				r.Put("/max-operations", s.setHostMaxOperations)
@@ -168,7 +173,7 @@ func dockerFailure(w http.ResponseWriter, r *http.Request, e error) {
 	// The link reports a request that ran out of time as unavailable too; a
 	// slow call on a connected Host is not an unreachable Host.
 	if errors.Is(e, runtime.ErrHostUnavailable) && !errors.Is(e, context.DeadlineExceeded) {
-		problem(w, r, http.StatusServiceUnavailable, "HOST_UNREACHABLE", "The workspace Host Agent is unreachable.")
+		problem(w, r, http.StatusServiceUnavailable, "HOST_UNREACHABLE", "The workspace Host is unreachable.")
 		return
 	}
 	if errors.Is(e, store.ErrMissing) || errors.Is(e, runtime.ErrMissing) || errors.Is(e, store.ErrBusy) {

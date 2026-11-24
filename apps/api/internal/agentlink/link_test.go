@@ -34,7 +34,7 @@ type fakeRuntime struct {
 	runtime.Engine
 	container runtime.Container
 	run       func(context.Context, runtime.Exec) (int, error)
-	purge     func(context.Context) error
+	purge     func(context.Context, runtime.Spec, bool) error
 	start     func(context.Context) error
 	terminal  runtime.Terminal
 }
@@ -52,7 +52,9 @@ func (f *fakeRuntime) Run(ctx context.Context, _ string, exec runtime.Exec) (int
 
 func (f *fakeRuntime) Start(ctx context.Context, _ string) error { return f.start(ctx) }
 
-func (f *fakeRuntime) Purge(ctx context.Context, _ string, _ bool) error { return f.purge(ctx) }
+func (f *fakeRuntime) Purge(ctx context.Context, spec runtime.Spec, all bool) error {
+	return f.purge(ctx, spec, all)
+}
 func (f *fakeRuntime) Terminal(context.Context, string) (runtime.Terminal, error) {
 	return f.terminal, nil
 }
@@ -372,8 +374,12 @@ func TestPurgeResultIsRecoveredAfterDisconnectAndAgentRestart(t *testing.T) {
 	hub, server, beats := testHub(t, nil)
 	var invocations atomic.Int32
 	entered, settle := make(chan struct{}), make(chan struct{})
+	target := runtime.Spec{WorkspaceID: "ws", ProjectVolumeRevision: 2}
 	agent := Agent{JournalPath: filepath.Join(t.TempDir(), "journal.sqlite"), Engine: &fakeRuntime{
-		purge: func(ctx context.Context) error {
+		purge: func(ctx context.Context, spec runtime.Spec, all bool) error {
+			if spec != target || all {
+				t.Errorf("Agent purged unexpected target: %+v, all=%v", spec, all)
+			}
 			if invocations.Add(1) == 1 {
 				close(entered)
 			}
@@ -389,10 +395,10 @@ func TestPurgeResultIsRecoveredAfterDisconnectAndAgentRestart(t *testing.T) {
 	awaitHeartbeat(t, beats, "purger")
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	ctx = WithOperation(ctx, "op", "ws")
+	ctx = runtime.WithOperation(ctx, "op", "ws")
 	engine := hub.Engine("purger")
 	result := make(chan error, 1)
-	go func() { result <- engine.Purge(ctx, "ws", false) }()
+	go func() { result <- engine.Purge(ctx, target, false) }()
 	select {
 	case <-entered:
 	case <-ctx.Done():
@@ -404,13 +410,13 @@ func TestPurgeResultIsRecoveredAfterDisconnectAndAgentRestart(t *testing.T) {
 	}
 	close(settle)
 	awaitHeartbeat(t, beats, "purger")
-	if err := engine.Purge(ctx, "ws", false); err != nil {
+	if err := engine.Purge(ctx, target, false); err != nil {
 		t.Fatalf("replay after reconnect: %v", err)
 	}
 	stop()
 	startTestAgent(t, server, "purger", agent)
 	awaitHeartbeat(t, beats, "purger")
-	if err := engine.Purge(ctx, "ws", false); err != nil || invocations.Load() != 1 {
+	if err := engine.Purge(ctx, target, false); err != nil || invocations.Load() != 1 {
 		t.Fatalf("replay re-executed a completed purge: invocations=%d err=%v", invocations.Load(), err)
 	}
 }

@@ -47,7 +47,7 @@ func TestApplyGitCredentialRoundTripsAndJournalsFingerprint(t *testing.T) {
 	awaitHeartbeat(t, beats, host)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	ctx = WithOperation(ctx, operation, spec.WorkspaceID)
+	ctx = runtime.WithOperation(ctx, operation, spec.WorkspaceID)
 	engine := hub.Engine(host).(runtime.GitCredentialWriter)
 	if err := engine.ApplyGitCredential(ctx, spec, id, credential); err == nil || strings.Contains(err.Error(), credential.Token) {
 		t.Fatal("failed Agent write did not return a safe error")

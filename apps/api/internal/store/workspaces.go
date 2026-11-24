@@ -7,23 +7,24 @@ import (
 )
 
 type Workspace struct {
-	ID                 string `json:"id"`
-	HostID             string `json:"assigned_host_id"`
-	Name               string `json:"name"`
-	Image              string `json:"image"`
-	RepoURL            string `json:"repo_url"`
-	Branch             string `json:"branch"`
-	CPU                int64  `json:"cpu_milli"`
-	Memory             int64  `json:"memory_mb"`
-	Disk               int64  `json:"disk_bytes"`
-	Desired            string `json:"desired_state"`
-	Observed           string `json:"observed_state"`
-	Paused             bool   `json:"paused"`
-	StartUnverified    bool   `json:"-"`
-	ObservationVersion int64  `json:"-"`
-	Generation         int    `json:"generation"`
-	Error              string `json:"error"`
-	UpdatedAt          string `json:"updated_at"`
+	ID                    string `json:"id"`
+	HostID                string `json:"assigned_host_id"`
+	Name                  string `json:"name"`
+	Image                 string `json:"image"`
+	RepoURL               string `json:"repo_url"`
+	Branch                string `json:"branch"`
+	CPU                   int64  `json:"cpu_milli"`
+	Memory                int64  `json:"memory_mb"`
+	Disk                  int64  `json:"disk_bytes"`
+	Desired               string `json:"desired_state"`
+	Observed              string `json:"observed_state"`
+	Paused                bool   `json:"paused"`
+	StartUnverified       bool   `json:"-"`
+	ObservationVersion    int64  `json:"-"`
+	Generation            int    `json:"generation"`
+	ProjectVolumeRevision int    `json:"-"`
+	Error                 string `json:"error"`
+	UpdatedAt             string `json:"updated_at"`
 }
 
 type Git struct {
@@ -57,12 +58,12 @@ type Operation struct {
 	FinishedAt  *string `json:"finished_at"`
 }
 
-const workspaceFields = "id,name,image,repo_url,branch,cpu_milli,memory_mb,desired_state,observed_state,paused,start_unverified,generation,error,updated_at,observation_version,assigned_host_id,disk_bytes"
+const workspaceFields = "id,name,image,repo_url,branch,cpu_milli,memory_mb,desired_state,observed_state,paused,start_unverified,generation,error,updated_at,observation_version,assigned_host_id,disk_bytes,project_volume_revision"
 const operationFields = "id,workspace_id,type,status,target_generation,purge,phase,attempts,error,created_at,finished_at,host_id"
 const containerFields = "generation,docker_id,image_id,status,created_at,host_id"
 
 func scanWorkspace(r scanner) (w Workspace, err error) {
-	err = missing(r.Scan(&w.ID, &w.Name, &w.Image, &w.RepoURL, &w.Branch, &w.CPU, &w.Memory, &w.Desired, &w.Observed, &w.Paused, &w.StartUnverified, &w.Generation, &w.Error, &w.UpdatedAt, &w.ObservationVersion, &w.HostID, &w.Disk))
+	err = missing(r.Scan(&w.ID, &w.Name, &w.Image, &w.RepoURL, &w.Branch, &w.CPU, &w.Memory, &w.Desired, &w.Observed, &w.Paused, &w.StartUnverified, &w.Generation, &w.Error, &w.UpdatedAt, &w.ObservationVersion, &w.HostID, &w.Disk, &w.ProjectVolumeRevision))
 	return
 }
 func scanOp(r scanner) (o Operation, err error) {
@@ -259,6 +260,20 @@ func (s *Store) ClaimOp(ctx context.Context, requireLocalLease ...bool) (o Opera
 func (s *Store) OpPhase(ctx context.Context, id string, phase int) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE operations SET phase=? WHERE id=?`, phase, id)
 	return err
+}
+
+// AdvanceResetVolume commits the new project volume identity before Ensure may
+// create it. A delayed Docker DELETE can then only address the retired name.
+func (s *Store) AdvanceResetVolume(ctx context.Context, op Operation) (int, error) {
+	var revision int
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE operations SET phase=1 WHERE id=? AND workspace_id=? AND type='reset' AND status='running' AND phase=0`, op.ID, op.WorkspaceID)
+		if err = affected(res, err, ErrBusy); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `UPDATE workspaces SET project_volume_revision=project_volume_revision+1 WHERE id=? RETURNING project_volume_revision`, op.WorkspaceID).Scan(&revision)
+	})
+	return revision, err
 }
 
 // An uncertain operation stays exclusive for its Workspace while the same

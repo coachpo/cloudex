@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coachpo/cloudex/apps/api/internal/agentlink"
 	"github.com/coachpo/cloudex/apps/api/internal/remote"
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
@@ -80,10 +79,11 @@ func logError(ctx context.Context, what string, e error) {
 }
 
 func spec(w store.Workspace, gen int) runtime.Spec {
-	return runtime.Spec{WorkspaceID: w.ID, Image: w.Image, Generation: gen, CPU: w.CPU, Memory: w.Memory}
+	return runtime.Spec{WorkspaceID: w.ID, Image: w.Image, Generation: gen, ProjectVolumeRevision: w.ProjectVolumeRevision, CPU: w.CPU, Memory: w.Memory}
 }
 
 var errStartUnverified = errors.New("verify started container")
+var errResetCheckpoint = errors.New("persist project volume change")
 
 // A rejection fails a Start or Stop without marking the Workspace as broken:
 // Start was not sent to Docker, or reconciliation observes what Stop left.
@@ -102,7 +102,7 @@ func (c *Control) operation(ctx context.Context) bool {
 	}
 	run, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	run = agentlink.WithOperation(run, o.ID, w.ID)
+	run = runtime.WithOperation(run, o.ID, w.ID)
 	state, container, e := c.lifecycle(run, w, o)
 	if ctx.Err() != nil {
 		return false
@@ -111,13 +111,13 @@ func (c *Control) operation(ctx context.Context) bool {
 	if e != nil {
 		message = e.Error()
 	}
-	retry := c.Agents != nil && e != nil && (errors.Is(e, runtime.ErrHostUnavailable) || run.Err() != nil)
+	retry := errors.Is(e, errResetCheckpoint) || (c.Agents != nil && e != nil && (errors.Is(e, runtime.ErrHostUnavailable) || run.Err() != nil))
 	cleanCreate := false
 	if !retry && e != nil && o.Type == "create" {
 		if verifier, ok := c.EngineFor(w.HostID).(interface {
 			NoWorkspaceArtifacts(context.Context, runtime.Spec) (bool, error)
 		}); ok {
-			check, stop := context.WithTimeout(agentlink.WithOperation(ctx, o.ID, w.ID), 10*time.Second)
+			check, stop := context.WithTimeout(runtime.WithOperation(ctx, o.ID, w.ID), 10*time.Second)
 			var verificationErr error
 			cleanCreate, verificationErr = verifier.NoWorkspaceArtifacts(check, spec(w, o.Target))
 			retry = errors.Is(verificationErr, runtime.ErrHostUnavailable) || check.Err() != nil
@@ -132,7 +132,7 @@ func (c *Control) operation(ctx context.Context) bool {
 		var err error
 		switch {
 		case retry:
-			err = c.Store.RetryOp(ctx, o.ID, "Waiting to confirm the outcome with the Host Agent: "+message)
+			err = c.Store.RetryOp(ctx, o.ID, "Waiting to confirm the operation outcome: "+message)
 		case cleanCreate:
 			err = c.Store.FailCleanCreate(ctx, o, message)
 		case errors.Is(e, errStartUnverified):
@@ -189,7 +189,7 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 			}
 		}
 		if o.Purge {
-			if e := engine.Purge(ctx, w.ID, true); e != nil {
+			if e := engine.Purge(ctx, target, true); e != nil {
 				return "", nil, e
 			}
 		}
@@ -204,13 +204,14 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 			if e := engine.Remove(ctx, target); e != nil {
 				return "", nil, e
 			}
-			if e := engine.Purge(ctx, w.ID, false); e != nil {
+			if e := engine.Purge(ctx, target, false); e != nil {
 				return "", nil, e
 			}
-			// Persist this boundary before any step can recreate/populate the volume.
-			if e := c.Store.OpPhase(ctx, o.ID, 1); e != nil {
-				return "", nil, e
+			revision, e := c.Store.AdvanceResetVolume(ctx, o)
+			if e != nil {
+				return "", nil, fmt.Errorf("%w: %w", errResetCheckpoint, e)
 			}
+			target.ProjectVolumeRevision = revision
 		}
 	}
 	var ci runtime.Container

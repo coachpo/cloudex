@@ -36,10 +36,14 @@ func NewConfig(bind, port, network string) (Config, error) {
 	if e != nil || p < 1 || p > 65535 {
 		return Config{}, errors.New("invalid CLOUDEX_SSH_PORT (1–65535)")
 	}
-	if !dockerNetwork.MatchString(network) || network == "bridge" || network == "host" || network == "none" || network == "default" {
+	if !ValidWorkspaceNetwork(network) {
 		return Config{}, errors.New("CLOUDEX_SSH_NETWORK must name a dedicated Docker bridge")
 	}
 	return Config{Bind: ip, Port: p, Network: network}, nil
+}
+
+func ValidWorkspaceNetwork(network string) bool {
+	return dockerNetwork.MatchString(network) && network != "bridge" && network != "host" && network != "none" && network != "default"
 }
 
 func ValidHost(host string) bool {

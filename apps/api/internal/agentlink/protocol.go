@@ -45,18 +45,19 @@ type frame struct {
 }
 
 type request struct {
-	Method            string                     `json:"method"`
-	ID                string                     `json:"id,omitempty"`
-	Spec              *runtime.Spec              `json:"spec,omitempty"`
-	Address           netip.AddrPort             `json:"address,omitempty"`
-	PurgeAll          bool                       `json:"purge_all,omitempty"`
-	OperationID       string                     `json:"operation_id,omitempty"`
-	WorkspaceID       string                     `json:"workspace_id,omitempty"`
-	Exec              *execRequest               `json:"exec,omitempty"`
-	Config            *AgentConfig               `json:"config,omitempty"`
-	GitCredential     *runtime.GitCredential     `json:"git_credential,omitempty"`
-	InitialCodexFiles *runtime.InitialCodexFiles `json:"initial_codex_files,omitempty"`
-	AuthorizedKeys    []string                   `json:"authorized_keys,omitempty"`
+	Method                string                     `json:"method"`
+	ID                    string                     `json:"id,omitempty"`
+	Spec                  *runtime.Spec              `json:"spec,omitempty"`
+	Address               netip.AddrPort             `json:"address,omitempty"`
+	ProjectVolumeRevision int                        `json:"project_volume_revision,omitempty"`
+	PurgeAll              bool                       `json:"purge_all,omitempty"`
+	OperationID           string                     `json:"operation_id,omitempty"`
+	WorkspaceID           string                     `json:"workspace_id,omitempty"`
+	Exec                  *execRequest               `json:"exec,omitempty"`
+	Config                *AgentConfig               `json:"config,omitempty"`
+	GitCredential         *runtime.GitCredential     `json:"git_credential,omitempty"`
+	InitialCodexFiles     *runtime.InitialCodexFiles `json:"initial_codex_files,omitempty"`
+	AuthorizedKeys        []string                   `json:"authorized_keys,omitempty"`
 }
 
 type execRequest struct {

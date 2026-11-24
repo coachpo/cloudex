@@ -13,7 +13,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func (d *Docker) DialWorkspaceSSH(ctx context.Context, id string, address netip.AddrPort, network string) (net.Conn, error) {
+func (d *Docker) DialWorkspaceSSH(ctx context.Context, id string, address netip.AddrPort, network string) (_ net.Conn, outErr error) {
+	defer d.classifyOutcome(&outErr)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	c, err := d.ownedContainer(ctx, id)
 	if err != nil {
 		return nil, err
@@ -27,7 +30,7 @@ func (d *Docker) DialWorkspaceSSH(ctx context.Context, id string, address netip.
 	if endpoint == nil || endpoint.IPAddress != address.Addr() {
 		return nil, ErrOwnership
 	}
-	return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", address.String())
+	return d.dialWorkspace(ctx, "tcp", address.String())
 }
 
 func (d *Docker) SSHHostKey(ctx context.Context, id string) (string, error) {

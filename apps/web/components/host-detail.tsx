@@ -1,7 +1,7 @@
 "use client";
 
 import { useT } from "@/components/i18n-provider";
-import { hostName, type MessageKey } from "@/lib/i18n";
+import { hostName, localizeSSHMessage, type MessageKey } from "@/lib/i18n";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
@@ -17,7 +17,15 @@ import { api, byteSize, canPlaceOnHost, change, GiB, hostImageReady, hostListQue
 
 export function HostDetail({ id }: { id: string }) {
   const { locale, t } = useT();
+  const client = useQueryClient();
   const host = useQuery(hostQuery(id));
+  const reconnect = useMutation({
+    mutationFn: () => change<Host>(hostPath(id) + "/ssh/reconnect", "POST"),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: hostQuery(id).queryKey, exact: true });
+      void client.invalidateQueries({ queryKey: hostListQuery.queryKey });
+    },
+  });
   const settings = useQuery(settingsQuery);
   const [issuing, setIssuing] = useState(false);
   const info = host.data;
@@ -33,12 +41,21 @@ export function HostDetail({ id }: { id: string }) {
         {image && canPlaceOnHost(info, image) && <Button asChild><Link href={hostWorkspacePath("/workspaces/new", id)}>
           <Plus data-icon="inline-start"/>{t("newWorkspace")}
         </Link></Button>}
-        {info.id !== "local" && info.scheduling_state !== "disabled" && (info.status === "enrolling" || info.status === "offline") &&
+        {info.connection_type === "agent" && info.id !== "local" && info.scheduling_state !== "disabled" && (info.status === "enrolling" || info.status === "offline") &&
           <Button disabled={issuing} type="button" onClick={() => setIssuing(true)}>{t("issueNewToken")}</Button>}
+        {info.connection_type === "ssh" && info.scheduling_state !== "disabled" && (info.status === "offline" || info.status === "degraded") &&
+          <Button type="button" variant="outline" onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
+            {t(reconnect.isPending ? "hostSSHConnecting" : "retryHostSSH")}
+          </Button>}
+        {info.connection_type === "ssh" && <Button disabled={issuing} type="button" variant="outline" onClick={() => setIssuing(true)}>{t("updateHostSSH")}</Button>}
       </div>}
     </div>
     {host.error && <Notice error={host.error} retry={() => host.refetch()}/>}
-    {issuing && info && <HostEnrollmentPanel host={info} onClose={() => setIssuing(false)}/>}
+    {reconnect.error && <Notice error={reconnect.error}/>}
+    {reconnect.isSuccess && (info?.status === "offline" || info?.status === "degraded") && info.scheduling_state !== "disabled" &&
+      <p className="small muted" role="status">{t("hostReconnectRequested")}</p>}
+    {info?.connection_error && <p role="alert" className="notice">{localizeSSHMessage(locale, info.connection_error)}</p>}
+    {issuing && info && <HostEnrollmentPanel key={info.id} host={info} onClose={() => setIssuing(false)}/>}
     {info ? <>
       <HostSchedulingPanel host={info}/>
       <div className="two-up">
@@ -53,7 +70,9 @@ export function HostDetail({ id }: { id: string }) {
             <Facts items={[
               [t("version"), info.engine || null],
               [t("osArch"), [info.os, info.arch].filter(Boolean).join(" · ") || null],
-              [t("agentVersion"), info.agent_version || null],
+              info.connection_type === "ssh"
+                ? [t("sshDirect"), `${info.ssh_user}@${info.ssh_address}`]
+                : [t("agentVersion"), info.agent_version || null],
               [t("runningContainers"), info.engine ? t("runningContainerCount", { running: info.running_containers.toLocaleString(locale), total: info.total_containers.toLocaleString(locale) }) : null],
               [t("defaultWorkspaceImage"), image ? <><code>{image}</code>
                 <span className="entry-secondary">{hostImageReady(info, image) ? t("state.ready") : t("workspaceImageNotReady")}</span></> : null],
@@ -163,7 +182,7 @@ function OperationLimit({ info, observedAt, unavailable }: { info: Host; observe
       [t("hostOperationActual"), info.last_seen ? actual.toLocaleString(locale) : null],
     ]}/>
     {target !== actual && <p className="small muted mt-2" role="status">
-      {t(info.last_seen ? "operationLimitApplying" : "operationLimitWaitingForAgent")}
+      {t(info.last_seen ? "operationLimitApplying" : "operationLimitWaitingForHost")}
     </p>}
     <form className="form mt-3" noValidate onSubmit={e => {
       e.preventDefault();

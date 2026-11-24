@@ -43,7 +43,7 @@ func TestWriteInitialCodexFilesReportsWriteErrors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	eng := hub.Engine("host").(*engine)
-	apply := WithOperation(ctx, "create", target.WorkspaceID)
+	apply := runtime.WithOperation(ctx, "create", target.WorkspaceID)
 	if err := eng.WriteInitialCodexFiles(apply, target, "container", config); err == nil || !strings.Contains(err.Error(), writeError.Error()) {
 		t.Fatalf("expected agent write error, got %v", err)
 	}

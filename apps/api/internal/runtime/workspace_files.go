@@ -34,7 +34,8 @@ type workspaceFile struct {
 	mode          int64
 }
 
-func (d *Docker) copyWorkspaceFiles(ctx context.Context, id, directory string, files []workspaceFile, owner int) error {
+func (d *Docker) copyWorkspaceFiles(ctx context.Context, id, directory string, files []workspaceFile, owner int) (outErr error) {
+	defer d.classifyOutcome(&outErr)
 	var archive bytes.Buffer
 	if err := writeWorkspaceFiles(&archive, files, owner); err != nil {
 		return err

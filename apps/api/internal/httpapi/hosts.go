@@ -139,8 +139,19 @@ func (s *Server) applyHostMode(ctx context.Context, id, mode string) (store.Host
 		return store.Host{}, err
 	}
 	defer unlock()
+	previous, err := s.Store.Host(ctx, id)
+	if err != nil {
+		return store.Host{}, err
+	}
 	host, err := s.Store.SetHostScheduling(ctx, id, mode)
-	if err == nil && mode == "disabled" && s.DisconnectAgent != nil {
+	if err != nil {
+		return host, err
+	}
+	if host.ConnectionType == "ssh" {
+		if s.SSHHosts != nil && (previous.Scheduling == "disabled") != (host.Scheduling == "disabled") {
+			s.SSHHosts.Changed(id)
+		}
+	} else if mode == "disabled" && s.DisconnectAgent != nil {
 		s.DisconnectAgent(host.ID)
 	}
 	return host, err

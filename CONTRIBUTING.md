@@ -15,7 +15,7 @@
 
 ### 项目边界
 
-- 保持单控制面和单可信管理员的部署边界。每台 Host 只向本机 Host Agent 提供 Docker socket。工作容器面向可信管理员。见[架构](ARCHITECTURE.md)。
+- 保持单控制面和单可信管理员的部署边界。Agent 接入通过本机 Host Agent 访问 Docker socket。SSH 直连由控制面核验 Host 公钥后，使用管理员登记的账号经 SSH 访问远端本机 socket。工作容器面向可信管理员。见[架构](ARCHITECTURE.md)。
 - 保持原生 SSH 与 Codex Desktop 会话彼此独立。
 
 ## 运营背景
@@ -78,6 +78,12 @@ docker network rm cloudex-gateway-test
 ```
 
 仅移除本次验收新建的测试网络；若同名已存在，不复用或删除未知网络。SSH 验收只初始化协议，不使用真实 OpenAI 登录或模型调用。
+
+[SSH 直连 Host 验收](apps/api/internal/httpapi/ssh_host_integration_test.go)需要一个通过 SSH 可达且使用独立测试 daemon 的 Host。先在该 daemon 准备标准工作镜像，设置专用的 `CLOUDEX_TEST_SSH_NETWORK`、`CLOUDEX_TEST_HOST_ADDRESS`（含端口）、`CLOUDEX_TEST_HOST_USERNAME` 和独立核对的 `CLOUDEX_TEST_HOST_PUBLIC_KEY`。认证使用 `CLOUDEX_TEST_HOST_PASSWORD` 或 `CLOUDEX_TEST_HOST_PRIVATE_KEY`，加密私钥可附 `CLOUDEX_TEST_HOST_PASSPHRASE`。进入 `apps/api` 执行：
+
+```sh
+CLOUDEX_TEST_SSH_HOST=1 go test -count=1 -v ./internal/httpapi -run '^TestSSHHostWorkspaceAccess$'
+```
 
 ## 文档
 

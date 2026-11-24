@@ -9,10 +9,10 @@
 ## 生命周期操作
 
 - 提交成功返回 `202`。通过 `Location` 查询操作结果。创建和生命周期请求支持幂等重试。同一键可取回原操作，复用键时请求参数须一致，创建时的[仓库令牌](#仓库凭据)除外。
-- Reset 和 Delete 都须确认 Workspace ID。只有 Delete 可显式清除保留卷。各操作对数据的影响见[数据保留](operations.md#数据保留)。
+- Reset 和 Delete 都须确认 Workspace ID。Reset 清理旧项目卷并为新工作树分配独立的卷标识，断线后重试清理仍指向旧卷。只有 Delete 可显式清除全部保留卷。各操作对数据的影响见[数据保留](operations.md#数据保留)。
 - Docker 暂停的 Workspace 可以 Stop，须解除暂停才能 Start。Start 在发往 Docker 前失败时，操作记为失败，期望和观测状态保留。若 Docker 可能已启动容器，控制面会重新核验当前代次与 SSH 就绪状态，已记录的失败仍可查询。
 - Stop 失败时，期望状态记为停止，操作记为失败。控制面根据 Docker 的实际状态更新观测，Workspace 仍可继续操作。
-- 只有尚未尝试的排队操作可以取消。取消尚未派发的 Create 会释放预留。Agent 失联或执行结果待确认时，控制面可以重新派发同一操作，保留目标代次和预留。
+- 只有尚未尝试的排队操作可以取消。取消尚未派发的 Create 会释放预留。Host 失联或执行结果待确认时，控制面可以重新派发同一操作，保留目标代次和预留。
 
 ## 仓库凭据
 
@@ -30,7 +30,7 @@
 
 ## 实时指标
 
-只有运行中的容器且 Docker 已提供样本时才有实时指标。调用方可从错误区分样本暂不可用、容器已不存在和 Agent 失联。[指标接口](../apps/api/internal/httpapi/workspaces.go) · [运行时错误](../apps/api/internal/httpapi/router.go)
+只有运行中的容器且 Docker 已提供样本时才有实时指标。调用方可从错误区分样本暂不可用、容器已不存在和 Host 失联。[指标接口](../apps/api/internal/httpapi/workspaces.go) · [运行时错误](../apps/api/internal/httpapi/router.go)
 
 ## 删除与历史
 

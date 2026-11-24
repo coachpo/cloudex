@@ -13,16 +13,33 @@ var ErrExecPaused = errors.New("Docker refused to create exec while the containe
 var ErrExecStartConflict = errors.New("Docker refused to start exec because the container was unavailable")
 var ErrStartOutcomeUnknown = errors.New("Docker container start outcome is unknown")
 var ErrOwnership = errors.New("Docker object is not owned by this workspace")
-var ErrHostUnavailable = errors.New("Host Agent is unavailable or the command outcome is unknown")
+var ErrHostUnavailable = errors.New("Host is unavailable or the command outcome is unknown")
 var ErrMetricsNotReady = errors.New("Docker has no live metrics sample for the container")
 
 const WorkDir = "/workspace/project"
 
+type operationKey struct{}
+
+type operation struct {
+	id, workspace string
+}
+
+// WithOperation binds commands and retries to the durable control-plane operation.
+func WithOperation(ctx context.Context, operationID, workspaceID string) context.Context {
+	return context.WithValue(ctx, operationKey{}, operation{operationID, workspaceID})
+}
+
+func OperationFromContext(ctx context.Context) (operationID, workspaceID string) {
+	o, _ := ctx.Value(operationKey{}).(operation)
+	return o.id, o.workspace
+}
+
 type Spec struct {
-	WorkspaceID, Image string
-	Generation         int
-	CPU, Memory        int64
-	SSHNetwork         string
+	WorkspaceID, Image    string
+	Generation            int
+	ProjectVolumeRevision int
+	CPU, Memory           int64
+	SSHNetwork            string
 }
 
 type Container struct {
@@ -95,7 +112,7 @@ type Engine interface {
 	Stop(context.Context, string) error
 	Remove(context.Context, Spec) error
 	// Purge removes the project volume and, when purgeAll is true, the home and SSH host key volumes.
-	Purge(ctx context.Context, workspaceID string, purgeAll bool) error
+	Purge(ctx context.Context, spec Spec, purgeAll bool) error
 	Run(context.Context, string, Exec) (int, error)
 	SSHHostKey(context.Context, string) (string, error)
 	SyncAuthorizedKeys(context.Context, string, []string) error

@@ -38,7 +38,7 @@ export default function HostsPage() {
             return <tr key={h.id}>
               <td>
                 <Link className="entry-link link" href={hostPath(h.id)}>{hostName(t, h)}</Link>
-                <span className="entry-secondary">{h.id === "local" ? t("controlPlaneHost") : h.engine ? `Docker ${h.engine}` : t("remoteHost")}</span>
+                <span className="entry-secondary">{h.id === "local" ? t("controlPlaneHost") : h.connection_type === "ssh" ? t("sshDirect") : h.engine ? `Docker ${h.engine}` : t("remoteHost")}</span>
                 {capacity && <span className="entry-secondary mobile-meta">
                   {t("hostResourceSummary", { cpu: (capacity.cpu_milli / 1000).toLocaleString(locale),
                     memory: byteSize(capacity.memory_bytes, locale), disk: byteSize(capacity.disk_bytes, locale) })}

@@ -72,7 +72,18 @@ func TestLifecycleWritesInitialCodexFilesBeforeFirstStart(t *testing.T) {
 				return nil
 			}
 			control := &Control{Store: db, Engine: engine}
-			_, _, err := control.lifecycle(ctx, w, store.Operation{ID: "operation", Type: tc.kind, Target: target})
+			op := store.Operation{ID: "operation", Type: tc.kind, Target: target}
+			if tc.kind == "reset" {
+				if _, err := db.Enqueue(ctx, w.ID, tc.kind, false, "", ""); err != nil {
+					t.Fatal(err)
+				}
+				claimed, _, err := db.ClaimOp(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				op = claimed
+			}
+			_, _, err := control.lifecycle(ctx, w, op)
 			if err != nil || engine.starts != 1 {
 				t.Fatalf("%s did not start: %v (starts=%d)", tc.kind, err, engine.starts)
 			}

@@ -237,11 +237,13 @@ func TestPurgeRemovesProjectAndOptionallyOtherVolumes(t *testing.T) {
 	const home = "cloudex-fixture-inst-workspace-home"
 	for _, tc := range []struct {
 		name     string
+		revision int
 		purgeAll bool
 		want     []string
 	}{
-		{"reset", false, []string{project}},
-		{"purge", true, []string{project, ssh, home}},
+		{"reset", 0, false, []string{project}},
+		{"second reset", 1, false, []string{project + "-r1"}},
+		{"purge", 2, true, []string{project + "-r2", ssh, home}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -271,7 +273,7 @@ func TestPurgeRemovesProjectAndOptionallyOtherVolumes(t *testing.T) {
 					w.WriteHeader(http.StatusBadRequest)
 				}
 			})
-			if err := d.Purge(t.Context(), workspace, tc.purgeAll); err != nil {
+			if err := d.Purge(t.Context(), Spec{WorkspaceID: workspace, ProjectVolumeRevision: tc.revision}, tc.purgeAll); err != nil {
 				t.Fatal(err)
 			}
 			mu.Lock()

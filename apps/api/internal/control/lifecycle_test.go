@@ -79,7 +79,7 @@ func (e *lifecycleEngine) Remove(_ context.Context, s runtime.Spec) error {
 	return nil
 }
 
-func (e *lifecycleEngine) Purge(_ context.Context, _ string, purgeAll bool) error {
+func (e *lifecycleEngine) Purge(_ context.Context, s runtime.Spec, purgeAll bool) error {
 	if purgeAll {
 		e.purged = append(e.purged, "all volumes")
 	} else {
@@ -235,5 +235,71 @@ func TestRestartedResetDoesNotPurgeTheNewProjectVolume(t *testing.T) {
 	ws, err := db.Workspace(ctx, w.ID)
 	if err != nil || ws.Generation != op.Target || ws.Observed != "running" {
 		t.Fatalf("replayed Reset did not finish on its original generation: %+v %v", ws, err)
+	}
+}
+
+type delayedPurgeEngine struct {
+	*lifecycleEngine
+	projects  map[int]string
+	delayNext func(func())
+}
+
+func (e *delayedPurgeEngine) Purge(ctx context.Context, s runtime.Spec, _ bool) error {
+	remove := func() { delete(e.projects, s.ProjectVolumeRevision) }
+	if delay := e.delayNext; delay != nil {
+		e.delayNext = nil
+		delay(remove)
+		return runtime.ErrHostUnavailable
+	}
+	remove()
+	return nil
+}
+
+func (e *delayedPurgeEngine) Ensure(ctx context.Context, s runtime.Spec) (runtime.Container, error) {
+	if _, ok := e.projects[s.ProjectVolumeRevision]; !ok {
+		e.projects[s.ProjectVolumeRevision] = "fresh project"
+	}
+	return e.lifecycleEngine.Ensure(ctx, s)
+}
+
+func TestDelayedResetPurgeCannotRemoveReplacement(t *testing.T) {
+	ctx := t.Context()
+	db, w, ci := seedRecoveryWorkspace(t, "running", nil)
+	worker, stop := context.WithCancel(ctx)
+	defer stop()
+	var delayed func()
+	engine := &delayedPurgeEngine{
+		lifecycleEngine: &lifecycleEngine{containers: map[int]*runtime.Container{1: &ci}},
+		projects:        map[int]string{0: "old project"},
+		delayNext:       func(remove func()) { delayed = remove; stop() },
+	}
+	c := &Control{Store: db, Engine: engine}
+	op, err := db.Enqueue(ctx, w.ID, "reset", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.operation(worker)
+	if delayed == nil {
+		t.Fatal("reset did not issue its purge")
+	}
+	if err := db.RequeueOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !c.operation(ctx) {
+		t.Fatal("restarted worker did not resume the reset")
+	}
+	done, err := db.Operation(ctx, op.ID)
+	if err != nil || done.Status != "succeeded" {
+		t.Fatalf("reset after disconnect: %+v %v", done, err)
+	}
+	delayed()
+	reset, err := db.Workspace(ctx, w.ID)
+	if err != nil || len(engine.projects) != 1 || engine.projects[reset.ProjectVolumeRevision] != "fresh project" {
+		t.Fatalf("delayed Docker delete removed the replacement: workspace=%+v projects=%v err=%v", reset, engine.projects, err)
+	}
+	engine.projects[reset.ProjectVolumeRevision] = "user data"
+	rebuilt := runOperation(t, c, w.ID, "rebuild", false)
+	if rebuilt.Status != "succeeded" || len(engine.projects) != 1 || engine.projects[reset.ProjectVolumeRevision] != "user data" {
+		t.Fatalf("rebuild changed the project volume: %+v %v", rebuilt, engine.projects)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/coachpo/cloudex/apps/api/internal/control"
+	"github.com/coachpo/cloudex/apps/api/internal/hostmanager"
 	"github.com/coachpo/cloudex/apps/api/internal/httpapi"
 	"github.com/coachpo/cloudex/apps/api/internal/remote"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
@@ -156,7 +157,12 @@ func run(parent context.Context) error {
 		return e
 	}
 	defer agents.close()
-	controller.Agents = agents.Hub
+	hosts, e := hostmanager.New(ctx, db, instance, ssh.Network, aead, agents.Hub, controller.SyncConnectedHostSSHKeys)
+	if e != nil {
+		return e
+	}
+	defer hosts.Close()
+	controller.Agents = hosts
 	signer, e := controller.PrepareGateway(ctx, instance)
 	if e != nil {
 		return e
@@ -167,7 +173,7 @@ func run(parent context.Context) error {
 	}
 	defer gateway.Close()
 	api := &httpapi.Server{Control: controller, Origin: origin, AgentCertificate: agents.caPEM,
-		DisconnectAgent: agents.Disconnect}
+		DisconnectAgent: agents.Disconnect, SSHHosts: hosts}
 	srv := &http.Server{Addr: env("CLOUDEX_ADDR", "127.0.0.1:3000"), Handler: api.Handler(proxy),
 		BaseContext:       func(_ net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}

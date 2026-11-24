@@ -26,8 +26,9 @@ docker compose up -d --build
 ```
 
 1. 从本机打开[控制台](http://localhost:3000)。首次访问时创建管理员账号，之后用已有账号登录。
-2. 确认 **Hosts** 中目标 Host 在线。在 **New workspace** 选择 Host 和资源，创建空仓库或填写 HTTPS 仓库地址与分支。私有仓库可单独填写凭据。
-3. 在 **设置 → SSH 公钥** 添加客户端公钥，再按[连接步骤](docs/operations.md#通过-ssh-连接-workspace)验证两层主机密钥并打开 `/workspace/project`。也可以在 **Web terminal** 打开 Shell。
+2. 默认 Compose 通过本机 Agent 接入 Docker。要添加其他机器，可在 **Hosts → Add host** 选择 **SSH 直连**，也可注册由远程机器主动连接控制面的 Agent。见[加入远程 Host](docs/operations.md#加入远程-host)。
+3. 确认 **Hosts** 中目标 Host 在线。在 **New workspace** 选择 Host 和资源，创建空仓库或填写 HTTPS 仓库地址与分支。私有仓库可单独填写凭据。
+4. 在 **设置 → SSH 公钥** 添加客户端公钥，再按[连接步骤](docs/operations.md#通过-ssh-连接-workspace)验证两层主机密钥并打开 `/workspace/project`。也可以在 **Web terminal** 打开 Shell。
 
 ## 文档
 

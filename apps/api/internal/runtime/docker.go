@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -34,9 +35,11 @@ const generationLabel = "cloud.generation"
 var sshContainerPort = network.MustParsePort(strconv.Itoa(remote.BackendPort) + "/tcp")
 
 type Docker struct {
-	cli      *client.Client
-	instance string
-	hostID   string
+	remote        bool
+	cli           *client.Client
+	instance      string
+	hostID        string
+	dialWorkspace func(context.Context, string, string) (net.Conn, error)
 }
 
 func NewDocker(instance string) (*Docker, error) {
@@ -51,12 +54,31 @@ func NewHostDocker(instance, hostID string) (*Docker, error) {
 	return d, err
 }
 
+// NewRemoteDocker uses the supplied transport for Docker requests and validated
+// Workspace SSH forwarding. Both dialers must target the same authenticated host.
+func NewRemoteDocker(instance, hostID string, dialDocker, dialWorkspace func(context.Context, string, string) (net.Conn, error)) (*Docker, error) {
+	d, err := newDocker(instance, client.WithHost("unix:///var/run/docker.sock"), client.WithDialContext(func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dialDocker(ctx, network, address)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHostUnavailable, err)
+		}
+		return conn, nil
+	}))
+	if err != nil {
+		return nil, err
+	}
+	d.hostID = hostID
+	d.remote = true
+	d.dialWorkspace = dialWorkspace
+	return d, nil
+}
+
 func newDocker(instance string, opts ...client.Opt) (*Docker, error) {
 	cli, err := client.New(append(opts, client.WithHTTPResponseHook(recordDockerPostStatus))...)
 	if err != nil {
 		return nil, err
 	}
-	return &Docker{cli: cli, instance: instance}, nil
+	return &Docker{cli: cli, instance: instance, dialWorkspace: (&net.Dialer{}).DialContext}, nil
 }
 
 type dockerPostStatusKey struct{}
@@ -91,9 +113,13 @@ const (
 	homeMount       = "/home/coder"
 )
 
-func (d *Docker) volumeNames(id string) [3]string {
-	base := d.name(id)
-	return [3]string{base + "-data", base + "-ssh", base + "-home"}
+func (d *Docker) volumeNames(s Spec) [3]string {
+	base := d.name(s.WorkspaceID)
+	project := base + "-data"
+	if s.ProjectVolumeRevision > 0 {
+		project += "-r" + strconv.Itoa(s.ProjectVolumeRevision)
+	}
+	return [3]string{project, base + "-ssh", base + "-home"}
 }
 
 // ManagedWorkspace identifies the Workspace that owns an exact Docker ID.
@@ -110,7 +136,11 @@ func containerStopped(s *container.State) bool {
 		!s.Running && !s.Paused && !s.Restarting && !s.Dead && s.Pid == 0
 }
 
-func (d *Docker) inspectWorkspace(ctx context.Context, s Spec) (container.InspectResponse, error) {
+func (d *Docker) inspectWorkspace(ctx context.Context, s Spec) (_ container.InspectResponse, outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if _, expected := OperationFromContext(ctx); expected != "" && expected != s.WorkspaceID {
+		return container.InspectResponse{}, ErrOwnership
+	}
 	out, e := d.cli.ContainerInspect(ctx, d.containerName(s), client.ContainerInspectOptions{})
 	if errdefs.IsNotFound(e) {
 		return container.InspectResponse{}, ErrMissing
@@ -167,7 +197,8 @@ func (d *Docker) InspectDigests(ctx context.Context, c *Container) {
 	}
 }
 
-func (d *Docker) HasImage(ctx context.Context, image string) (bool, error) {
+func (d *Docker) HasImage(ctx context.Context, image string) (_ bool, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	_, err := d.cli.ImageInspect(ctx, image)
 	if errdefs.IsNotFound(err) {
 		return false, nil
@@ -180,7 +211,8 @@ func (d *Docker) ValidateContainer(ctx context.Context, id string) error {
 	return err
 }
 
-func (d *Docker) ownedContainer(ctx context.Context, id string) (container.InspectResponse, error) {
+func (d *Docker) ownedContainer(ctx context.Context, id string) (_ container.InspectResponse, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	out, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if errdefs.IsNotFound(err) {
 		return container.InspectResponse{}, ErrMissing
@@ -193,6 +225,9 @@ func (d *Docker) ownedContainer(ctx context.Context, id string) (container.Inspe
 		return container.InspectResponse{}, ErrOwnership
 	}
 	workspace := c.Config.Labels[workspaceLabel]
+	if _, expected := OperationFromContext(ctx); expected != "" && expected != workspace {
+		return container.InspectResponse{}, ErrOwnership
+	}
 	generation, err := strconv.Atoi(c.Config.Labels[generationLabel])
 	if workspace == "" || err != nil || generation < 1 || !d.owns(c.Config.Labels, workspace) ||
 		c.Name != "/"+d.containerName(Spec{WorkspaceID: workspace, Generation: generation}) {
@@ -222,7 +257,8 @@ func (d *Docker) ensureVolume(ctx context.Context, name, id string) error {
 	return nil
 }
 
-func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
+func (d *Docker) Ensure(ctx context.Context, s Spec) (_ Container, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	current, e := d.Inspect(ctx, s)
 	if !errors.Is(e, ErrMissing) {
 		return current, e
@@ -233,7 +269,7 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
 	} else if e != nil {
 		return Container{}, e
 	}
-	names := d.volumeNames(s.WorkspaceID)
+	names := d.volumeNames(s)
 	labels := d.labels(s.WorkspaceID)
 	labels[generationLabel] = strconv.Itoa(s.Generation)
 	init := true
@@ -264,7 +300,11 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
 	return d.Inspect(ctx, s)
 }
 
-func (d *Docker) Start(ctx context.Context, id string) error {
+func (d *Docker) Start(ctx context.Context, id string) (outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if err := d.validateRemoteID(ctx, id); err != nil {
+		return err
+	}
 	var status int
 	_, e := d.cli.ContainerStart(context.WithValue(ctx, dockerPostStatusKey{}, &status), id, client.ContainerStartOptions{})
 	if e != nil && (status < http.StatusBadRequest || status >= http.StatusInternalServerError) {
@@ -272,12 +312,17 @@ func (d *Docker) Start(ctx context.Context, id string) error {
 	}
 	return e
 }
-func (d *Docker) Stop(ctx context.Context, id string) error {
+func (d *Docker) Stop(ctx context.Context, id string) (outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if err := d.validateRemoteID(ctx, id); err != nil {
+		return err
+	}
 	seconds := 10
 	_, e := d.cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &seconds})
 	return e
 }
-func (d *Docker) Remove(ctx context.Context, s Spec) error {
+func (d *Docker) Remove(ctx context.Context, s Spec) (outErr error) {
+	defer d.classifyOutcome(&outErr)
 	c, e := d.Inspect(ctx, s)
 	if errors.Is(e, ErrMissing) {
 		return nil
@@ -291,8 +336,12 @@ func (d *Docker) Remove(ctx context.Context, s Spec) error {
 	}
 	return e
 }
-func (d *Docker) Purge(ctx context.Context, id string, purgeAll bool) error {
-	names := d.volumeNames(id)
+func (d *Docker) Purge(ctx context.Context, s Spec, purgeAll bool) (outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if _, expected := OperationFromContext(ctx); expected != "" && expected != s.WorkspaceID {
+		return ErrOwnership
+	}
+	names := d.volumeNames(s)
 	selected := names[:1]
 	if purgeAll {
 		selected = names[:]
@@ -305,7 +354,7 @@ func (d *Docker) Purge(ctx context.Context, id string, purgeAll bool) error {
 		if e != nil {
 			return e
 		}
-		if !d.owns(v.Volume.Labels, id) {
+		if !d.owns(v.Volume.Labels, s.WorkspaceID) {
 			return ErrOwnership
 		}
 		if _, e = d.cli.VolumeRemove(ctx, n, client.VolumeRemoveOptions{}); e != nil && !errdefs.IsNotFound(e) {
@@ -315,11 +364,12 @@ func (d *Docker) Purge(ctx context.Context, id string, purgeAll bool) error {
 	return nil
 }
 
-func (d *Docker) NoWorkspaceArtifacts(ctx context.Context, s Spec) (bool, error) {
+func (d *Docker) NoWorkspaceArtifacts(ctx context.Context, s Spec) (_ bool, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	if _, err := d.Inspect(ctx, s); !errors.Is(err, ErrMissing) {
 		return false, err
 	}
-	for _, name := range d.volumeNames(s.WorkspaceID) {
+	for _, name := range d.volumeNames(s) {
 		if _, err := d.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
 			return false, err
 		}
@@ -327,7 +377,11 @@ func (d *Docker) NoWorkspaceArtifacts(ctx context.Context, s Spec) (bool, error)
 	return true, nil
 }
 
-func (d *Docker) Run(ctx context.Context, id string, x Exec) (int, error) {
+func (d *Docker) Run(ctx context.Context, id string, x Exec) (_ int, outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if err := d.validateRemoteID(ctx, id); err != nil {
+		return -1, err
+	}
 	execID, result, e := d.startExec(ctx, id, x)
 	if e != nil {
 		return -1, e
@@ -403,7 +457,7 @@ func (t *dockerTerminal) Close() error {
 	t.closeOnce.Do(func() {
 		t.stopLease()
 		t.connection.Close()
-		t.engine.endTerminal(t.container, t.session)
+		t.engine.endTerminal(context.Background(), t.container, t.session)
 	})
 	return nil
 }
@@ -412,8 +466,8 @@ func (t *dockerTerminal) Resize(ctx context.Context, cols, rows uint) error {
 	return e
 }
 
-func (d *Docker) endTerminal(containerID, session string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (d *Docker) endTerminal(ctx context.Context, containerID, session string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	code, err := d.Run(ctx, containerID, Exec{Args: []string{"workspace-control", "cancel", session}, Dir: "/workspace"})
 	if (err != nil && !errdefs.IsNotFound(err) && !errdefs.IsConflict(err)) || (err == nil && code != 0) {
@@ -421,7 +475,13 @@ func (d *Docker) endTerminal(containerID, session string) {
 	}
 }
 
-func (d *Docker) Terminal(ctx context.Context, id string) (Terminal, error) {
+func (d *Docker) Terminal(ctx context.Context, id string) (_ Terminal, outErr error) {
+	defer d.classifyOutcome(&outErr)
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	if err := d.validateRemoteID(ctx, id); err != nil {
+		return nil, err
+	}
 	size := client.ConsoleSize{Height: 24, Width: 80}
 	var token [16]byte
 	rand.Read(token[:])
@@ -433,7 +493,7 @@ func (d *Docker) Terminal(ctx context.Context, id string) (Terminal, error) {
 	}
 	r, e := d.cli.ExecAttach(ctx, p.ID, client.ExecAttachOptions{TTY: true, ConsoleSize: size})
 	if e != nil {
-		d.endTerminal(id, session)
+		d.endTerminal(ctx, id, session)
 		return nil, e
 	}
 	// Docker can keep an exec PTY alive after the client socket is gone.
@@ -456,7 +516,11 @@ func (d *Docker) Terminal(ctx context.Context, id string) (Terminal, error) {
 	return &dockerTerminal{engine: d, execID: p.ID, container: id, session: session, connection: r.HijackedResponse, stopLease: stop}, nil
 }
 
-func (d *Docker) Logs(ctx context.Context, id string, w io.Writer) error {
+func (d *Docker) Logs(ctx context.Context, id string, w io.Writer) (outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if err := d.validateRemoteID(ctx, id); err != nil {
+		return err
+	}
 	r, e := d.cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Timestamps: true, Tail: "200"})
 	if e != nil {
 		return e
@@ -465,7 +529,11 @@ func (d *Docker) Logs(ctx context.Context, id string, w io.Writer) error {
 	_, e = stdcopy.StdCopy(w, w, r)
 	return e
 }
-func (d *Docker) Metrics(ctx context.Context, id string) (Metrics, error) {
+func (d *Docker) Metrics(ctx context.Context, id string) (_ Metrics, outErr error) {
+	defer d.classifyOutcome(&outErr)
+	if err := d.validateRemoteID(ctx, id); err != nil {
+		return Metrics{}, err
+	}
 	r, e := d.cli.ContainerStats(ctx, id, client.ContainerStatsOptions{IncludePreviousSample: true})
 	if errdefs.IsNotFound(e) {
 		return Metrics{}, ErrMissing
@@ -500,7 +568,8 @@ func (d *Docker) Metrics(ctx context.Context, id string) (Metrics, error) {
 	}
 	return m, nil
 }
-func (d *Docker) Host(ctx context.Context) (Host, error) {
+func (d *Docker) Host(ctx context.Context) (_ Host, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	r, e := d.cli.Info(ctx, client.InfoOptions{})
 	if e != nil {
 		return Host{}, e
@@ -508,7 +577,8 @@ func (d *Docker) Host(ctx context.Context) (Host, error) {
 	h := r.Info
 	return Host{h.Name, h.ServerVersion, h.OperatingSystem, h.Architecture, h.NCPU, h.MemTotal, h.ContainersRunning, h.Containers}, nil
 }
-func (d *Docker) Containers(ctx context.Context) ([]HostContainer, error) {
+func (d *Docker) Containers(ctx context.Context) (_ []HostContainer, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	r, e := d.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if e != nil {
 		return nil, e
@@ -527,7 +597,8 @@ func (d *Docker) Containers(ctx context.Context) ([]HostContainer, error) {
 	}
 	return out, nil
 }
-func (d *Docker) Images(ctx context.Context) ([]Image, error) {
+func (d *Docker) Images(ctx context.Context) (_ []Image, outErr error) {
+	defer d.classifyOutcome(&outErr)
 	r, e := d.cli.ImageList(ctx, client.ImageListOptions{})
 	if e != nil {
 		return nil, e

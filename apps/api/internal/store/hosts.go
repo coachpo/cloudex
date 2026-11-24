@@ -60,11 +60,18 @@ type Host struct {
 	Reserved            Resources `json:"reserved"`
 	Available           Resources `json:"available"`
 	MaxOperationsTarget int       `json:"max_operations_target"`
+	ConnectionType      string    `json:"connection_type"`
+	SSHAddress          string    `json:"ssh_address,omitempty"`
+	SSHUser             string    `json:"ssh_user,omitempty"`
+	SSHHostKey          string    `json:"ssh_host_key,omitempty"`
+	SSHRevision         int64     `json:"ssh_revision,omitempty"`
+	ConnectionError     string    `json:"connection_error,omitempty"`
 	certificate         string
 	HostReport
 }
 
 const hostFields = `h.id,h.name,h.scheduling_state,h.scheduling_version,h.created_at,h.last_seen,h.last_heartbeat_unix,coalesce(h.certificate_serial,''),
+ h.connection_type,h.ssh_address,h.ssh_user,h.ssh_host_key,h.ssh_revision,h.connection_error,
  h.agent_version,h.engine,h.os,h.arch,h.healthy,h.max_operations,h.max_operations_target,h.running_containers,h.total_containers,
  (SELECT json_group_array(json_object('image',image,'ready',json(CASE WHEN ready THEN 'true' ELSE 'false' END)) ORDER BY image)
   FROM host_images WHERE host_id=h.id),
@@ -80,6 +87,7 @@ func scanHost(r scanner) (h Host, err error) {
 	var last int64
 	var images string
 	err = missing(r.Scan(&h.ID, &h.Name, &h.Scheduling, &h.SchedulingVersion, &h.CreatedAt, &h.LastSeen, &last, &h.certificate,
+		&h.ConnectionType, &h.SSHAddress, &h.SSHUser, &h.SSHHostKey, &h.SSHRevision, &h.ConnectionError,
 		&h.AgentVersion, &h.Engine, &h.OS, &h.Arch, &h.Healthy, &h.MaxOperations, &h.MaxOperationsTarget, &h.RunningContainers, &h.TotalContainers, &images,
 		&h.Capacity.CPU, &h.Capacity.Memory, &h.Capacity.Disk, &h.Reserved.CPU, &h.Reserved.Memory, &h.Reserved.Disk))
 	if err != nil {
@@ -90,7 +98,7 @@ func scanHost(r scanner) (h Host, err error) {
 	}
 	h.Reachable = last > hostCutoff()
 	switch {
-	case h.certificate == "":
+	case h.ConnectionType == "agent" && h.certificate == "":
 		h.Status = "enrolling"
 	case !h.Reachable:
 		h.Status = "offline"
@@ -162,7 +170,7 @@ func (s *Store) RenewEnrollment(ctx context.Context, id, tokenHash string, expir
 		if err != nil {
 			return err
 		}
-		if id == LocalHostID {
+		if id == LocalHostID || h.ConnectionType != "agent" {
 			return ErrInvalidEnrollment
 		}
 		if h.Scheduling == "disabled" {
@@ -206,13 +214,13 @@ func (s *Store) SetLocalHostCertificate(ctx context.Context, serial string) erro
 func setHostCertificate(ctx context.Context, db executor, id, serial string) error {
 	res, err := db.ExecContext(ctx, `UPDATE host_nodes SET
  last_heartbeat_unix=CASE WHEN certificate_serial=? THEN last_heartbeat_unix ELSE 0 END,
- certificate_serial=? WHERE id=? AND scheduling_state<>'disabled'`, serial, serial, id)
+ certificate_serial=? WHERE id=? AND connection_type='agent' AND scheduling_state<>'disabled'`, serial, serial, id)
 	return affected(res, err, ErrHostUnauthorized)
 }
 
 func (s *Store) AuthenticateHost(ctx context.Context, id, serial string) error {
 	var matches bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM host_nodes WHERE id=? AND certificate_serial=? AND scheduling_state<>'disabled')`, id, serial).Scan(&matches)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM host_nodes WHERE id=? AND connection_type='agent' AND certificate_serial=? AND scheduling_state<>'disabled')`, id, serial).Scan(&matches)
 	if err == nil && !matches {
 		return ErrHostUnauthorized
 	}
@@ -220,16 +228,20 @@ func (s *Store) AuthenticateHost(ctx context.Context, id, serial string) error {
 }
 
 func (s *Store) Heartbeat(ctx context.Context, id, serial string, report HostReport) error {
+	return s.heartbeat(ctx, id, "connection_type='agent' AND certificate_serial=?", serial, report)
+}
+
+func (s *Store) heartbeat(ctx context.Context, id, identityPredicate string, identity any, report HostReport) error {
 	if report.CPU < 0 || report.Memory < 0 ||
 		report.MaxOperations < 1 || report.RunningContainers < 0 || report.TotalContainers < report.RunningContainers {
 		return errors.New("invalid host capacity report")
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE host_nodes SET agent_version=?,engine=?,os=?,arch=?,healthy=?,
+		res, err := tx.ExecContext(ctx, `UPDATE host_nodes SET connection_error='',agent_version=?,engine=?,os=?,arch=?,healthy=?,
  max_operations=?,running_containers=?,total_containers=?,last_seen=?,last_heartbeat_unix=unixepoch()
- WHERE id=? AND certificate_serial=? AND scheduling_state<>'disabled'`,
+ WHERE id=? AND scheduling_state<>'disabled' AND `+identityPredicate,
 			report.AgentVersion, report.Engine, report.OS, report.Arch, report.Healthy,
-			report.MaxOperations, report.RunningContainers, report.TotalContainers, now(), id, serial)
+			report.MaxOperations, report.RunningContainers, report.TotalContainers, now(), id, identity)
 		if err := affected(res, err, ErrHostUnauthorized); err != nil {
 			return err
 		}
@@ -281,9 +293,10 @@ func (s *Store) SetHostScheduling(ctx context.Context, id, state string) (h Host
 	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE host_nodes SET
+ ssh_revision=ssh_revision+(connection_type='ssh' AND ?='disabled' AND scheduling_state<>'disabled'),
  scheduling_version=scheduling_version+(scheduling_state<>?), scheduling_state=?,
  last_heartbeat_unix=CASE WHEN ?='disabled' THEN 0 ELSE last_heartbeat_unix END WHERE id=?`,
-			state, state, state, id)
+			state, state, state, state, id)
 		if err := affected(res, err, ErrMissing); err != nil {
 			return err
 		}

@@ -115,7 +115,7 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 				t.Error(e)
 			}
 		}
-		if e := d.Purge(cleanup, created.Workspace, true); e != nil {
+		if e := d.Purge(cleanup, runtime.Spec{WorkspaceID: created.Workspace}, true); e != nil {
 			t.Error(e)
 		}
 	})

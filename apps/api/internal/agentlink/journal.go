@@ -16,19 +16,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type operationKey struct{}
-
-type operation struct {
-	id        string
-	workspace string
-}
-
-// WithOperation attaches the durable control-plane operation to runtime calls.
-// A replay carries the same identity across control-plane and Agent restarts.
-func WithOperation(ctx context.Context, operationID, workspaceID string) context.Context {
-	return context.WithValue(ctx, operationKey{}, operation{id: operationID, workspace: workspaceID})
-}
-
 type journal struct{ *sql.DB }
 
 func openJournal(ctx context.Context, path string) (*journal, error) {
@@ -224,7 +211,7 @@ func (a *executor) dockerMutation(ctx context.Context, req request) (any, error)
 		c, err := a.Engine.Ensure(ctx, *req.Spec)
 		return encodeContainer(c), err
 	case "purge":
-		return nil, a.Engine.Purge(ctx, req.ID, req.PurgeAll)
+		return nil, a.Engine.Purge(ctx, runtime.Spec{WorkspaceID: req.ID, ProjectVolumeRevision: req.ProjectVolumeRevision}, req.PurgeAll)
 	}
 	if err := a.validateContainer(ctx, req.ID); err != nil {
 		return nil, err

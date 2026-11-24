@@ -9,6 +9,7 @@ import { change, hostListQuery, hostPath, hostQuery, stamp, type Host, type Host
 import { Button } from "./ui/button";
 import { Field, FieldGroup, FieldLabel } from "./ui/field";
 import { Notice } from "./shared";
+import { HostSSHForm } from "./host-ssh-form";
 
 function downloadCertificate(pem: string) {
   const url = URL.createObjectURL(new Blob([pem], { type: "application/x-pem-file" }));
@@ -66,6 +67,8 @@ function EnrollmentInstructions({ enrollment, onDone }: { enrollment: HostEnroll
 export function HostEnrollmentPanel({ host, onClose }: { host?: Host; onClose: () => void }) {
   const { t } = useT();
   const client = useQueryClient();
+  const [method, setMethod] = useState<"agent" | "ssh">(host?.connection_type ?? "ssh");
+  const [sshPending, setSSHPending] = useState(false);
   const mutation = useMutation({
     gcTime: 0,
     mutationFn: (name: string) => host
@@ -83,8 +86,16 @@ export function HostEnrollmentPanel({ host, onClose }: { host?: Host; onClose: (
   }
 
   return <section className="panel" aria-labelledby="enrollment-heading">
-    <div className="section-head"><h2 id="enrollment-heading">{mutation.data ? t("connectHostAgent") : host ? t("issueAToken") : t("addHost")}</h2></div>
-    {mutation.data ? <EnrollmentInstructions enrollment={mutation.data} onDone={close}/> :
+    <div className="section-head"><h2 id="enrollment-heading">{mutation.data ? t("connectHostAgent") : host ? t(method === "ssh" ? "updateHostSSH" : "issueAToken") : t("addHost")}</h2></div>
+    {!host && !mutation.data && <fieldset className="mb-4" disabled={sshPending || mutation.isPending}>
+      <legend className="small mb-2">{t("connectionMethod")}</legend>
+      <div className="actions">
+        <label className="label-inline"><input type="radio" name="connection" checked={method === "ssh"} onChange={() => setMethod("ssh")}/> {t("sshDirect")}</label>
+        <label className="label-inline"><input type="radio" name="connection" checked={method === "agent"} onChange={() => setMethod("agent")}/> Agent</label>
+      </div>
+    </fieldset>}
+    {method === "ssh" ? <HostSSHForm host={host} pending={sshPending} setPending={setSSHPending} onClose={close}/> :
+      mutation.data ? <EnrollmentInstructions enrollment={mutation.data} onDone={close}/> :
       <form className="form" onSubmit={e => {
         e.preventDefault();
         mutation.mutate(String(new FormData(e.currentTarget).get("name") ?? "").trim());

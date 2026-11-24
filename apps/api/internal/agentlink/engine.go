@@ -26,9 +26,7 @@ func (e *engine) begin(ctx context.Context, req request) (*exchange, error) {
 }
 
 func (e *engine) beginWithSetup(ctx context.Context, req request, handshake func(context.Context, *exchange) error) (*exchange, error) {
-	if op, ok := ctx.Value(operationKey{}).(operation); ok {
-		req.OperationID, req.WorkspaceID = op.id, op.workspace
-	}
+	req.OperationID, req.WorkspaceID = runtime.OperationFromContext(ctx)
 	setup, stop := context.WithTimeout(ctx, setupTimeout)
 	defer stop()
 	peer, err := e.hub.callAgent(ctx, setup, e.host, e.session, req)
@@ -108,8 +106,8 @@ func (e *engine) Remove(ctx context.Context, spec runtime.Spec) error {
 	return err
 }
 
-func (e *engine) Purge(ctx context.Context, id string, purgeAll bool) error {
-	_, err := callValue[struct{}](ctx, e, request{Method: "purge", ID: id, PurgeAll: purgeAll})
+func (e *engine) Purge(ctx context.Context, spec runtime.Spec, purgeAll bool) error {
+	_, err := callValue[struct{}](ctx, e, request{Method: "purge", ID: spec.WorkspaceID, ProjectVolumeRevision: spec.ProjectVolumeRevision, PurgeAll: purgeAll})
 	return err
 }
 
