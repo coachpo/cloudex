@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install --global "@openai/codex@${CODEX_VERSION}" \
     && useradd --create-home --uid 10001 --user-group --shell /bin/bash --password '*' coder \
     && install -d -o coder -g coder -m 0700 /workspace /home/coder/.codex \
-    && install -d -o coder -g coder -m 0700 /home/coder/.config /home/coder/.config/cloudex \
-    && install -d -m 0755 /run/cloudex-ssh \
+    && install -d -o coder -g coder -m 0700 /home/coder/.config \
+    && install -d -m 0755 /run/cloudex-ssh /etc/cloudex \
     && git config --system credential.helper '!/usr/local/bin/workspace-control git-credential' \
     && touch /workspace/.cloudex-volume \
     && chown coder:coder /workspace/.cloudex-volume \

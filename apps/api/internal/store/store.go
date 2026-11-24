@@ -36,6 +36,7 @@ type Store struct {
 	db           *sql.DB
 	admission    workspaceGates
 	sshAdmission sync.RWMutex
+	sshKeySync   workspaceGates
 }
 
 func ID() string { var b [16]byte; rand.Read(b[:]); return hex.EncodeToString(b[:]) }

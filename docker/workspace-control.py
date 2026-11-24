@@ -14,7 +14,7 @@ import sys
 import time
 
 
-GIT_CREDENTIAL_FILE = Path("/home/coder/.config/cloudex/git-credential.json")
+GIT_CREDENTIAL_FILE = Path("/etc/cloudex/git-credential.json")
 
 
 def git_credential(operation):

@@ -9,7 +9,6 @@ import { Lifecycle } from "./lifecycle";
 import { Operations, operationName } from "./operations";
 import { WorkspaceTerminal } from "./terminal";
 import { RemoteAccess } from "./remote-access";
-import { WorkspaceCodexSettings } from "./workspace-codex-settings";
 import { WorkspaceRepositoryCredential } from "./workspace-repository-credential";
 import { Empty, Facts, Notice, Status } from "./shared";
 import { hostName, statusName } from "@/lib/i18n";
@@ -149,14 +148,11 @@ function LogsView({id,generation,reachable}:{id:string;generation:number;reachab
 }
 function WorkspaceSettings({workspace:w,busy,onQueued}:{workspace:Workspace;busy:boolean;onQueued:(o:Accepted,k:string)=>void}) {
   const { t } = useT();
-  return <div className="two-up">
-    <WorkspaceCodexSettings key={w.id} id={w.id} busy={busy}/>
-    <div className="view-grid">
+  return <div className="view-grid">
       {w.repo_url && <WorkspaceRepositoryCredential key={w.id} id={w.id} busy={busy}/>}
       <section className="panel"><div className="section-head"><h2>{t("dataAndRemoval")}</h2></div>
         <p className="small muted mb-3">{t("resetPurgeHint")}</p>
         <Lifecycle workspace={w} busy={busy} onQueued={onQueued} destructive/>
       </section>
-    </div>
   </div>;
 }

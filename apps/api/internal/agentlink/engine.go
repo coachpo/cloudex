@@ -88,8 +88,8 @@ func (e *engine) Start(ctx context.Context, id string) error {
 	return err
 }
 
-func (e *engine) ApplyCodexConfig(ctx context.Context, spec runtime.Spec, id string, config runtime.CodexConfig) error {
-	_, err := callValue[struct{}](ctx, e, request{Method: "apply-codex-config", Spec: &spec, ID: id, CodexConfig: &config})
+func (e *engine) WriteInitialCodexFiles(ctx context.Context, spec runtime.Spec, id string, config runtime.InitialCodexFiles) error {
+	_, err := callValue[struct{}](ctx, e, request{Method: "write-initial-codex-files", Spec: &spec, ID: id, InitialCodexFiles: &config})
 	return err
 }
 
@@ -108,8 +108,8 @@ func (e *engine) Remove(ctx context.Context, spec runtime.Spec) error {
 	return err
 }
 
-func (e *engine) Purge(ctx context.Context, id string, includeSSHHostKey bool) error {
-	_, err := callValue[struct{}](ctx, e, request{Method: "purge", ID: id, IncludeSSHHostKey: includeSSHHostKey})
+func (e *engine) Purge(ctx context.Context, id string, purgeAll bool) error {
+	_, err := callValue[struct{}](ctx, e, request{Method: "purge", ID: id, PurgeAll: purgeAll})
 	return err
 }
 

@@ -235,11 +235,6 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 	a.call("POST", path+"/stop", nil, 202, &op)
 	a.opDone(op.Op)
 	get("stopped")
-	a.call("PUT", path+"/codex-config", map[string]any{
-		"revision": 0, "managed": true, "agents_md": "Managed SSH instructions\n",
-		"config_toml": runtime.CodexConfigSeed + "model = 'ssh-fixture-model'\n",
-		"auth_json":   `{"fixture":"fake-ssh-login"}`,
-	}, 200, nil)
 	stoppedKey, stoppedLine := testSSHKey(t)
 	rotate(stoppedLine)
 	rejects(first, "coder", ssh.PublicKeys(first))
@@ -328,13 +323,10 @@ printf "%s\n" "cli_auth_credentials_store = \"file\"" | cmp - ~/.codex/config.to
 	}
 	out, e = shell.CombinedOutput(`set -eu
 test "$(cat /workspace/project/ssh-fixture)" = kept
-test ! -e ~/.codex/ssh-fixture
-grep -Fxq 'Managed SSH instructions' ~/.codex/AGENTS.md
-grep -Fxq "model = 'ssh-fixture-model'" ~/.codex/config.toml
-test "$(cat ~/.codex/auth.json)" = '{"fixture":"fake-ssh-login"}'
-test "$(stat -c '%u:%g:%a' ~/.codex/auth.json)" = 10001:10001:600`)
+test "$(cat ~/.codex/ssh-fixture)" = kept
+test ! -e ~/.codex/auth.json`)
 	if e != nil {
-		t.Fatalf("rebuild did not preserve project files and reseed Codex files: %s %v", out, e)
+		t.Fatalf("rebuild did not preserve project and home files: %s %v", out, e)
 	}
 	sshSession.Close()
 	rotate()

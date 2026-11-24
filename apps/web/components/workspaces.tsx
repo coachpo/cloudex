@@ -99,7 +99,6 @@ export function Workspaces({ initialHostID }: { initialHostID: string }) {
         </section>
         <section className="panel"><div className="section-head"><h2>{t("persistentStorage")}</h2></div>
           <VolumeLegend state={t("projectAndSSHStorage")}/>
-          <p className="small muted mt-2">{t("rebuildStorageHint")}</p>
         </section>
       </div>
     </div>

@@ -7,7 +7,7 @@ import (
 
 // Serialize final admission with key replacement and lifecycle changes.
 func (s *Store) AdmitSSH(ctx context.Context, id, key string, generation int, accept func() error) error {
-	unlock, err := s.LockWorkspace(ctx, id)
+	unlock, err := s.admission.lock(ctx, id)
 	if err != nil {
 		return err
 	}

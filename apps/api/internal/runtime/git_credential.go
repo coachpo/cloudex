@@ -28,7 +28,7 @@ func (d *Docker) ApplyGitCredential(ctx context.Context, s Spec, id string, cred
 		return err
 	}
 	data, _ := json.Marshal(credential)
-	if err := d.copyWorkspaceFiles(ctx, id, "/home/coder/.config/cloudex", []workspaceFile{
+	if err := d.copyWorkspaceFiles(ctx, id, "/etc/cloudex", []workspaceFile{
 		{"git-credential.json", string(data), 0600},
 	}, 10001); err != nil {
 		return GitCredentialWriteError{Err: err}

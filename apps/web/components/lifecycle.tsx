@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Notice } from "./shared";
-import { change, codexConfigKey, idempotencyKey, mutationOutcomeUnknown, repositoryCredentialKey, workspaceState, wsPath, type Accepted, type Workspace } from "@/lib/api";
+import { change, idempotencyKey, mutationOutcomeUnknown, repositoryCredentialKey, workspaceState, wsPath, type Accepted, type Workspace } from "@/lib/api";
 
 type Kind = "start" | "stop" | "rebuild" | "reset" | "delete";
 type LifecycleRequest = Readonly<{
@@ -28,7 +28,6 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
 }) {
   const { t } = useT();
   const client = useQueryClient();
-  const savingCodexConfig = useIsMutating({ mutationKey: codexConfigKey(workspace.id) }) > 0;
   const savingCredential = useIsMutating({ mutationKey: repositoryCredentialKey(workspace.id) }) > 0;
   const [purge,setPurge] = useState(false);
   const mutation = useMutation({
@@ -45,10 +44,9 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
   const state = workspaceState(workspace);
   const uncertainRequest = mutationOutcomeUnknown(mutation.error) ? mutation.variables : undefined;
   const disabled = busy || mutation.isPending || !!uncertainRequest;
-  const awaitingConfig = (kind: Kind) => (savingCodexConfig && kind === "start") ||
-    ((savingCodexConfig || savingCredential) && (kind === "rebuild" || kind === "reset"));
+  const awaitingCredential = (kind: Kind) => savingCredential && (kind === "rebuild" || kind === "reset");
   function queue(kind: Kind) {
-    if (disabled || awaitingConfig(kind)) return;
+    if (disabled || awaitingCredential(kind)) return;
     mutation.mutate({
       kind,
       key: idempotencyKey(),
@@ -56,14 +54,14 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
     });
   }
   const confirm = (kind: Exclude<Kind,"start">) => <AlertDialog key={kind} onOpenChange={open=>{if(open)setPurge(false);}}>
-    <AlertDialogTrigger asChild><Button type="button" variant={destructive ? "destructive" : "outline"} disabled={disabled || awaitingConfig(kind)}>{t(labels[kind])}</Button></AlertDialogTrigger>
+    <AlertDialogTrigger asChild><Button type="button" variant={destructive ? "destructive" : "outline"} disabled={disabled || awaitingCredential(kind)}>{t(labels[kind])}</Button></AlertDialogTrigger>
     <AlertDialogContent>
       <AlertDialogHeader><AlertDialogTitle>{t("lifecycleConfirm", { action: t(labels[kind]), name: workspace.name })}</AlertDialogTitle>
         <AlertDialogDescription>{t(effects[kind])}</AlertDialogDescription></AlertDialogHeader>
       {kind==="delete" && <label className="actions small"><input type="checkbox" checked={purge} onChange={e=>setPurge(e.target.checked)}/>
         {t("purgeWorkspace")}</label>}
       <AlertDialogFooter><AlertDialogCancel>{t("keepWorkspace")}</AlertDialogCancel>
-        <AlertDialogAction variant={destructive ? "destructive" : "default"} disabled={disabled || awaitingConfig(kind)} onClick={()=>queue(kind)}>{t(labels[kind])}</AlertDialogAction>
+        <AlertDialogAction variant={destructive ? "destructive" : "default"} disabled={disabled || awaitingCredential(kind)} onClick={()=>queue(kind)}>{t(labels[kind])}</AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>;
@@ -72,11 +70,11 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
       {destructive ? <>{confirm("reset")}{confirm("delete")}</> : <>
         {(state==="running" || state==="paused") && confirm("stop")}
         {state==="stopped" && !!workspace.generation &&
-          <Button type="button" variant="outline" disabled={disabled || startBlocked || awaitingConfig("start")} onClick={()=>queue("start")}>{t("start")}</Button>}
+          <Button type="button" variant="outline" disabled={disabled || startBlocked} onClick={()=>queue("start")}>{t("start")}</Button>}
         {confirm("rebuild")}
       </>}
     </div>
     {mutation.error && <Notice error={mutation.error}
-      retry={uncertainRequest && !awaitingConfig(uncertainRequest.kind) ? ()=>mutation.mutate(uncertainRequest) : undefined}/>}
+      retry={uncertainRequest && !awaitingCredential(uncertainRequest.kind) ? ()=>mutation.mutate(uncertainRequest) : undefined}/>}
   </div>;
 }

@@ -40,3 +40,23 @@ func (s *Store) DesiredWorkspaceImages(ctx context.Context) ([]string, error) {
 		return image, err
 	})
 }
+
+type InitialCodexFiles struct {
+	AgentsMD   string `json:"agents_md"`
+	ConfigTOML string `json:"config_toml"`
+}
+
+func (s *Store) InitialCodexFiles(ctx context.Context) (InitialCodexFiles, error) {
+	var files InitialCodexFiles
+	err := s.db.QueryRowContext(ctx, `SELECT
+ COALESCE((SELECT value FROM meta WHERE key='setting.codex_agents_md'), ''),
+ COALESCE((SELECT value FROM meta WHERE key='setting.codex_config_toml'), '')`).
+		Scan(&files.AgentsMD, &files.ConfigTOML)
+	return files, err
+}
+
+func (s *Store) SetInitialCodexFiles(ctx context.Context, files InitialCodexFiles) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('setting.codex_agents_md',?),('setting.codex_config_toml',?)
+ ON CONFLICT (key) DO UPDATE SET value=excluded.value`, files.AgentsMD, files.ConfigTOML)
+	return err
+}

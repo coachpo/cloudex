@@ -8,7 +8,7 @@
 
 ### 投入使用
 
-向外开放入口前，先从本机完成[管理员初始化](#管理员账号)。项目投入使用时更新[环境判定](../AGENTS.md#环境与数据操作)和[迁移基线](../CONTRIBUTING.md#兼容与迁移)。若已有须保护的真实账号凭据，按 [ADR 0001](adr/0001-codex-home-managed-files.md#复核条件) 和 [ADR 0002](adr/0002-workspace-repository-credential.md#复核条件)复核存储与下发方式。
+向外开放入口前，先从本机完成[管理员初始化](#管理员账号)。项目投入使用时更新[环境判定](../AGENTS.md#环境与数据操作)和[迁移基线](../CONTRIBUTING.md#兼容与迁移)。若已有须保护的真实账号凭据，按 [ADR 0003](adr/0003-workspace-home-volume.md#复核条件) 和 [ADR 0002](adr/0002-workspace-repository-credential.md#复核条件)复核存储与下发方式。
 
 ### 预构建镜像
 
@@ -30,11 +30,11 @@
 docker compose exec api cloudex-server reset-admin
 ```
 
-## 管理 Workspace 的 Codex 文件
+## 初始 Codex 文件与登录
 
-在 **Workspace → 设置** 启用托管并编辑文件全文。保留项目并应用新配置时选择 **Rebuild**。Reset 会重新初始化项目，详见[数据保留](#数据保留)。
+在 **设置 → 新工作区的初始 Codex 文件** 填写 `AGENTS.md` 和 `config.toml`。后续新建的 Workspace 在首次启动前收到这些文件。要修改已有 Workspace，请在其 home 目录中直接编辑。
 
-需要保留登录时，粘贴当前 `auth.json`。同一份 ChatGPT 登录只用于一个 Workspace，刷新后旧副本可能失效。新容器无法登录时，重新粘贴有效的文件。凭据的可见性、适用形态和复核条件见 [ADR 0001](adr/0001-codex-home-managed-files.md)。
+在每个 Workspace 运行一次 `codex login --device-auth`。登录状态、Codex 会话和 home 中的用户工具会随 home 命名卷保留。[持久化决定](adr/0003-workspace-home-volume.md)
 
 ## 加入远程 Host
 
@@ -82,13 +82,13 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 
 ## 数据保留
 
-| 操作 | 项目卷 | 已有的 Workspace SSH 主机密钥 | 容器内的 Codex 目录与 Git 凭据 |
-|---|---|---|---|
-| Stop / Start | 保留 | 保留 | 同一容器保留原内容。 |
-| Rebuild | 保留 | 保留 | 新容器按镜像和当前托管设置重新生成。 |
-| Reset project | 删除并重新初始化 | 保留 | 与 Rebuild 相同。 |
-| Delete workspace | 默认保留，可显式清除 | 默认保留，可显式清除 | 随容器删除。 |
+| 操作 | 项目卷 | home 卷 | SSH 主机密钥卷 | Git 凭据文件 |
+|---|---|---|---|---|
+| Stop / Start | 保留 | 保留 | 保留 | 同一容器保留原文件。 |
+| Rebuild | 保留 | 保留 | 保留 | 新容器使用当前设置。 |
+| Reset project | 删除并重新初始化 | 保留 | 保留 | 新容器使用当前设置。 |
+| Delete workspace | 默认保留，可显式清除 | 默认保留，可显式清除 | 默认保留，可显式清除 | 随容器删除。 |
 
 停止、重建和 Host 失联时预留继续有效。删除并保留卷时只释放 CPU 和内存。要释放磁盘预留，应在删除 Workspace 时选择清除卷。直接在 Docker 清卷不会更新预留，保留的卷也不会自动挂到新 Workspace。
 
-需要保留数据时，分别保管控制面数据库、原 `CLOUDEX_MASTER_KEY`、各 Host 的 Agent 状态卷和 Workspace 持久卷。控制台不管理备份。数据库及备份含明文托管的 Codex 登录文件和仓库令牌，Gateway 和 Agent CA 私钥的恢复还需要原主密钥。项目数据、登录文件和私钥不得进入仓库或日志。[控制面卷](../compose.yaml) · [远程 Host 卷](../compose.agent.yaml) · [删除后的操作历史](workspace-lifecycle.md#删除与历史)
+需要保留数据时，分别保管控制面数据库、原 `CLOUDEX_MASTER_KEY`、各 Host 的 Agent 状态卷和 Workspace 持久卷。控制台不管理备份。数据库及备份含明文仓库令牌，home 卷及其备份含 Workspace 内的登录凭据。Gateway 和 Agent CA 私钥的恢复需要原主密钥。项目数据、登录文件和私钥不得进入仓库或日志。[控制面卷](../compose.yaml) · [远程 Host 卷](../compose.agent.yaml) · [删除后的操作历史](workspace-lifecycle.md#删除与历史)

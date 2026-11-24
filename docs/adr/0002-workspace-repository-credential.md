@@ -5,12 +5,12 @@
 
 ## 背景
 
-私有仓库的首次 clone 和之后通过 SSH、Web Terminal 或 Codex Desktop 执行的 Git 操作都需要凭据。Workspace 沿用[单控制面、单可信管理员的信任边界](0001-codex-home-managed-files.md#理由)。
+私有仓库的首次 clone 和之后通过 SSH、Web Terminal 或 Codex Desktop 执行的 Git 操作都需要凭据。Workspace 沿用[单控制面、单可信管理员的信任边界](../../ARCHITECTURE.md)。
 
 ## 决定
 
 1. 每个 Workspace 保存一份用户名和令牌，用于仓库 URL 指定的 HTTPS 主机及端口。令牌以明文保存在控制面数据库中。管理 API 只接受令牌写入，响应只提供配置状态和用户名。
-2. Host Agent 在 Create、Rebuild 和 Reset 生成的新容器首次启动前提供当前凭据。凭据文件归 `coder` 所有，权限为 `0600`。同一容器 Stop / Start 保留原文件。
+2. Host Agent 在 Create、Rebuild 和 Reset 生成的新容器首次启动前提供当前凭据。凭据写入容器可写层的 `/etc/cloudex/git-credential.json`，属主为 `coder`，权限为 `0600`。清除设置后创建的新容器没有此文件。同一容器 Stop / Start 保留原文件。
 3. 工作镜像向 Git 提供凭据，按 HTTPS 和主机字符串（含端口）匹配凭据，同一主机的其他仓库也可使用该令牌。Git 的 `store` 和 `erase` 不修改托管凭据。
 
 ## 后果

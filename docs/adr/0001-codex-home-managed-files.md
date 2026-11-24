@@ -1,6 +1,6 @@
 # 0001 Workspace 的 Codex 目录由控制台托管，不持久化
 
-- 状态：已接受
+- 状态：已被 [0003](0003-workspace-home-volume.md) 取代
 - 日期：2026-11-23
 
 ## 背景
@@ -9,7 +9,7 @@
 
 ## 决定
 
-1. `/home/coder/.codex` 随容器可写层存续。同一容器 Stop / Start、Docker 自动重启和 Host 重启保留内容。Create、Rebuild 和 Reset 从镜像和控制台保存的内容生成新目录。
+1. `/home/coder/.codex` 随容器可写层存续。同一容器 Stop / Start、Docker 自动重启和 Host 重启保留内容。Create、Rebuild、Reset 和冷迁移从镜像和控制台保存的内容生成新目录。
 2. 控制台按 Workspace 保存并编辑 `AGENTS.md`、`config.toml` 和 `auth.json` 全文。启用托管后只在新容器首次启动前写入。Start 不写入，容器里的文件及修改不回传。
 3. `auth.json` 按普通托管文件明文保存，API 和界面可回读全文，API Key 和 ChatGPT 登录形态同等处理。非空内容只要求是大小限制内的 JSON 对象，容器内权限为 `0600`。空内容跳过写入。
 4. `config.toml` 须为合法 TOML。`cli_auth_credentials_store` 可省略，显式设置时须为 `"file"`，以便登录状态保存在 `auth.json`。省略时的 Codex 上游默认值 `file` 是决策依据，未经仓库独立核实。
@@ -23,7 +23,7 @@
 
 - 决策依据中的 ChatGPT 刷新行为未经仓库独立核实。refresh token 轮换后，控制台的旧副本失效，新容器可能无法登录。多个 Workspace 共享登录会使彼此的 token 失效，须重新粘贴当前的 `auth.json`。API Key 形态不受轮换影响。
 - 控制面数据库和它的备份中含有明文的 Codex 凭据，要按凭据级别保护。这是对"API 密钥和自定义请求头加密保存"做法的有意例外。
-- Rebuild 和 Reset 会清除旧容器的会话、日志、登录状态和本地配置修改。长期配置须保存在控制台。
+- Rebuild、Reset 和冷迁移会清除旧容器的会话、日志、登录状态和本地配置修改。长期配置须保存在控制台。
 - 已有 Host 上遗留的 `*-codex` 卷不再识别或清理，项目的零保留政策不提供兼容处理。
 
 ## 复核条件

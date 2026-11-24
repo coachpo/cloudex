@@ -22,6 +22,7 @@ import (
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"github.com/coder/websocket"
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -417,32 +418,66 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 			stop()
 		}
 	})
-	var created acceptance
-	a.call("POST", "/workspaces", map[string]any{"name": "acceptance", "resources": map[string]int{"cpu_milli": 500, "memory_mb": 512}}, 202, &created)
-	path := "/workspaces/" + created.Workspace
-	t.Cleanup(func() {
-		end, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		for _, g := range []int{1, 2, 3, 4} {
-			if e := d.Remove(end, runtime.Spec{WorkspaceID: created.Workspace, Generation: g}); e != nil {
+	create := func(name string) (string, string, runtime.Container) {
+		t.Helper()
+		var created acceptance
+		a.call("POST", "/workspaces", map[string]any{"name": name, "resources": map[string]int{"cpu_milli": 500, "memory_mb": 512}}, 202, &created)
+		path := "/workspaces/" + created.Workspace
+		t.Cleanup(func() {
+			end, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			for _, g := range []int{1, 2, 3, 4} {
+				if e := d.Remove(end, runtime.Spec{WorkspaceID: created.Workspace, Generation: g}); e != nil {
+					t.Error(e)
+				}
+			}
+			if e := d.Purge(end, created.Workspace, true); e != nil {
 				t.Error(e)
 			}
-		}
-		if e := d.Purge(end, created.Workspace, true); e != nil {
-			t.Error(e)
-		}
-	})
-	a.opDone(created.Op)
-	var info runtime.Container
-	a.call("GET", path+"/inspect", nil, 200, &info)
+		})
+		a.opDone(created.Op)
+		var info runtime.Container
+		a.call("GET", path+"/inspect", nil, 200, &info)
+		return created.Workspace, path, info
+	}
+	imageWorkspace, imagePath, imageInfo := create("image home")
+	if !a.exec(d, imageInfo.ID, `test -w ~/.config && test -s ~/.bashrc &&
+printf '%s\n' 'cli_auth_credentials_store = "file"' | cmp - ~/.codex/config.toml &&
+test ! -e ~/.codex/auth.json`) {
+		t.Fatal("the fresh home volume did not inherit the image's home files")
+	}
+	var op acceptance
+	a.call("DELETE", imagePath, map[string]any{"confirm": imageWorkspace, "purge": true}, 202, &op)
+	a.opDone(op.Op)
+
+	settings := store.InitialCodexFiles{AgentsMD: "Initial workspace instructions\n",
+		ConfigTOML: runtime.CodexConfigSeed + "# Initial text\nmodel = 'workspace-model'\n"}
+	a.call("PUT", "/settings/codex-files", settings, 200, nil)
+	workspace, path, info := create("acceptance")
 	old := info.ID
-	if info.State != "running" || len(info.Mounts) != 2 || old == "" {
+	if info.State != "running" || len(info.Mounts) != 3 || old == "" {
 		t.Fatalf("inspect: %+v", info)
 	}
 	a.call("GET", path+"/metrics", nil, 200, nil)
 	a.call("GET", "/hosts/local/containers", nil, 200, nil)
-	if !a.exec(d, info.ID, `test -w ~/.config`) {
-		t.Fatal("the Workspace user cannot write its XDG config directory")
+	// Docker seeds the empty home volume before the initial files are copied in.
+	if !a.exec(d, info.ID, `set -eu
+test -s ~/.bashrc
+printf '%s\n' 'Initial workspace instructions' | cmp - ~/.codex/AGENTS.md
+printf '%s\n' 'cli_auth_credentials_store = "file"' '# Initial text' "model = 'workspace-model'" | cmp - ~/.codex/config.toml
+test ! -e ~/.codex/auth.json
+test "$(stat -c '%u:%g:%a' ~/.codex/AGENTS.md)" = 10001:10001:644
+test "$(stat -c '%u:%g:%a' ~/.codex/config.toml)" = 10001:10001:600`) {
+		t.Fatal("Create did not keep the image's home files and write the initial Codex files")
+	}
+	var homeVolume string
+	for _, mount := range info.Mounts {
+		if mount.Destination == "/home/coder" {
+			homeVolume = mount.Name
+		}
+	}
+	if homeVolume == "" {
+		t.Fatal("Docker did not report the named home volume")
 	}
 	out := a.shell(path, 113, 37, `printf '%s' "$$" > terminal.pid; printf "kept\n" > keep.txt; printf "login-fixture" > ~/.codex/local-fixture; stty size; printf 'TERM%s\n' '_DONE'`, "TERM_DONE")
 	if !strings.Contains(out, "37 113") {
@@ -451,55 +486,50 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 	waitFor(t, "terminal process to exit after disconnect", func() bool {
 		return a.exec(d, info.ID, `test -s terminal.pid && ! kill -0 "$(cat terminal.pid)" 2>/dev/null`)
 	})
-	if !a.exec(d, info.ID, `printf 'model = "manual"\n' > ~/.codex/config.toml`) {
-		t.Fatal("could not prepare the manual Codex config")
+	if !a.exec(d, info.ID, `set -eu
+printf 'model = "manual"\n' > ~/.codex/config.toml
+printf 'local instructions\n' > ~/.codex/AGENTS.md
+printf '{"fixture":"synthetic-login"}\n' > ~/.codex/auth.json
+mkdir -p ~/.local/bin
+printf 'user tool' > ~/.local/bin/fixture-tool`) {
+		t.Fatal("could not prepare local files in the named home volume")
 	}
-	var saved store.CodexConfig
-	settings := map[string]any{
-		"revision": 0, "managed": true, "agents_md": "Managed workspace instructions\n",
-		"config_toml": runtime.CodexConfigSeed + "# Managed text\nmodel = 'workspace-model'\n",
-		"auth_json":   "{\"fixture\":\"fake-login\"}\n",
-	}
-	a.call("PUT", path+"/codex-config", settings, 200, &saved)
-	checkLocalCodex := `grep -Fq 'model = "manual"' ~/.codex/config.toml && test ! -e ~/.codex/AGENTS.md && test -f ~/.codex/local-fixture`
-	if !a.exec(d, info.ID, checkLocalCodex) {
-		t.Fatal("saving Codex configuration changed the running container")
-	}
+	a.call("PUT", "/settings/codex-files", store.InitialCodexFiles{
+		AgentsMD: "Future Workspace instructions\n", ConfigTOML: "model = 'future-workspace'\n",
+	}, 200, nil)
+	checkLocalCodex := `set -eu
+grep -Fxq 'model = "manual"' ~/.codex/config.toml
+grep -Fxq 'local instructions' ~/.codex/AGENTS.md
+grep -Fxq '{"fixture":"synthetic-login"}' ~/.codex/auth.json
+grep -Fxq 'user tool' ~/.local/bin/fixture-tool
+grep -Fxq 'login-fixture' ~/.codex/local-fixture`
 	var activate acceptance
 	a.call("POST", path+"/stop", nil, 202, &activate)
 	a.opDone(activate.Op)
 	a.call("POST", path+"/start", nil, 202, &activate)
 	a.opDone(activate.Op)
 	a.call("GET", path+"/inspect", nil, 200, &info)
-	a.call("GET", path+"/codex-config", nil, 200, &saved)
-	if info.ID != old || saved.AppliedRevision != 0 || !a.exec(d, info.ID, checkLocalCodex) {
-		t.Fatal("Stop and Start should preserve the original container and its local Codex files")
+	if info.ID != old || !a.exec(d, info.ID, checkLocalCodex) {
+		t.Fatal("Stop and Start should preserve the original container and its home files")
 	}
 
-	if err := s.SetRepositoryCredential(ctx, created.Workspace, &store.RepositoryCredential{
+	if err := s.SetRepositoryCredential(ctx, workspace, &store.RepositoryCredential{
 		Host: "git.example.test", Username: "fixture-user", Token: "synthetic-docker-git-token",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !a.exec(d, info.ID, `test ! -e ~/.config/cloudex/git-credential.json`) {
+	if !a.exec(d, info.ID, `test ! -e /etc/cloudex/git-credential.json`) {
 		t.Fatal("saving the repository credential changed the existing container")
 	}
 
-	checkManagedCodex := `test ! -e ~/.codex/local-fixture &&
-  printf '%s\n' 'Managed workspace instructions' | cmp - ~/.codex/AGENTS.md &&
-  printf '%s\n' 'cli_auth_credentials_store = "file"' '# Managed text' "model = 'workspace-model'" | cmp - ~/.codex/config.toml &&
-  printf '%s\n' '{"fixture":"fake-login"}' | cmp - ~/.codex/auth.json &&
-  test "$(stat -c '%u:%g:%a' ~/.codex/AGENTS.md)" = 10001:10001:644 &&
-  test "$(stat -c '%u:%g:%a' ~/.codex/config.toml)" = 10001:10001:600 &&
-  test "$(stat -c '%u:%g:%a' ~/.codex/auth.json)" = 10001:10001:600`
 	a.call("POST", path+"/rebuild", nil, 202, &activate)
 	a.opDone(activate.Op)
 	a.call("GET", path+"/inspect", nil, 200, &info)
-	a.call("GET", path+"/codex-config", nil, 200, &saved)
-	if info.ID == old || saved.AppliedRevision != saved.Revision || !a.exec(d, info.ID, checkManagedCodex) {
-		t.Fatal("Rebuild did not write the managed Codex files into a new container")
+	if info.ID == old || !a.exec(d, info.ID, checkLocalCodex) {
+		t.Fatal("Rebuild did not preserve the home files")
 	}
 	if !a.exec(d, info.ID, `export GIT_TERMINAL_PROMPT=0
+test "$(stat -c '%u:%g:%a' /etc/cloudex/git-credential.json)" = 10001:10001:600 || exit 1
 matching=$(printf 'protocol=https\nhost=git.example.test\n\n' | git credential fill) || exit 1
 printf '%s\n' "$matching" | grep -Fxq 'username=fixture-user' &&
 printf '%s\n' "$matching" | grep -Fxq 'password=synthetic-docker-git-token' || exit 1
@@ -521,13 +551,7 @@ printf 'after\n' > tracked.txt`) {
 
 	old = info.ID
 
-	var op acceptance
-	cli, err := client.New(client.FromEnv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cli.Close()
-	if _, err := cli.ContainerPause(ctx, info.ID, client.ContainerPauseOptions{}); err != nil {
+	if _, err := docker.ContainerPause(ctx, info.ID, client.ContainerPauseOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -551,24 +575,29 @@ printf 'after\n' > tracked.txt`) {
 	a.call("POST", path+"/start", nil, 202, &op)
 	a.opDone(op.Op)
 
-	if !a.exec(d, info.ID, `test "$(cat keep.txt)" = kept && `+checkManagedCodex) {
-		t.Fatal("Rebuild did not keep the project and seed the managed Codex files")
+	if !a.exec(d, info.ID, checkLocalCodex+`
+test "$(cat keep.txt)" = kept`) {
+		t.Fatal("Rebuild did not preserve project and home files")
 	}
-	if !a.exec(d, info.ID, `printf 'local login' > ~/.codex/local-fixture &&
-  printf 'local config' > ~/.codex/config.toml && printf '{}' > ~/.codex/auth.json`) {
-		t.Fatal("could not prepare local Codex changes before Reset")
+	a.call("DELETE", path+"/repository-credential", nil, 204, nil)
+	if !a.exec(d, info.ID, `test -f /etc/cloudex/git-credential.json`) {
+		t.Fatal("clearing the repository credential changed the existing container")
 	}
+
 	old = info.ID
 	a.call("POST", path+"/reset", nil, 400, nil)
-	a.call("POST", path+"/reset", map[string]string{"confirm": created.Workspace}, 202, &op)
+	a.call("POST", path+"/reset", map[string]string{"confirm": workspace}, 202, &op)
 	a.opDone(op.Op)
 	a.call("GET", path+"/inspect", nil, 200, &info)
-	if info.ID == old || !a.exec(d, info.ID, `test ! -e keep.txt && `+checkManagedCodex) {
-		t.Fatal("Reset did not recreate the project and seed the managed Codex files")
+	if info.ID == old || !a.exec(d, info.ID, checkLocalCodex+"\ntest ! -e keep.txt && test ! -e /etc/cloudex/git-credential.json") {
+		t.Fatal("Reset did not keep home files, recreate the project, or omit the cleared credential")
 	}
-	a.call("DELETE", path, map[string]any{"confirm": created.Workspace, "purge": true}, 202, &op)
+	a.call("DELETE", path, map[string]any{"confirm": workspace, "purge": true}, 202, &op)
 	a.opDone(op.Op)
 	a.call("GET", path, nil, 404, nil)
+	if _, err := docker.VolumeInspect(ctx, homeVolume, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("Purge did not remove the home volume: %v", err)
+	}
 }
 
 func (a testAPI) exec(engine *runtime.Docker, id, command string) bool {

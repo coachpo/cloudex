@@ -230,17 +230,18 @@ func TestDockerExecAttachRejectsPauseBeforeStart(t *testing.T) {
 	}
 }
 
-func TestPurgeRemovesProjectAndOptionallySSHHostKey(t *testing.T) {
+func TestPurgeRemovesProjectAndOptionallyOtherVolumes(t *testing.T) {
 	const workspace = "workspace"
-	const project = "cloudex-workspace-data"
-	const ssh = "cloudex-workspace-ssh"
+	const project = "cloudex-fixture-inst-workspace-data"
+	const ssh = "cloudex-fixture-inst-workspace-ssh"
+	const home = "cloudex-fixture-inst-workspace-home"
 	for _, tc := range []struct {
-		name              string
-		includeSSHHostKey bool
-		want              []string
+		name     string
+		purgeAll bool
+		want     []string
 	}{
 		{"reset", false, []string{project}},
-		{"purge", true, []string{project, ssh}},
+		{"purge", true, []string{project, ssh, home}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -270,7 +271,7 @@ func TestPurgeRemovesProjectAndOptionallySSHHostKey(t *testing.T) {
 					w.WriteHeader(http.StatusBadRequest)
 				}
 			})
-			if err := d.Purge(t.Context(), workspace, tc.includeSSHHostKey); err != nil {
+			if err := d.Purge(t.Context(), workspace, tc.purgeAll); err != nil {
 				t.Fatal(err)
 			}
 			mu.Lock()

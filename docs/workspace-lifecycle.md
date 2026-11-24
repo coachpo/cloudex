@@ -20,13 +20,9 @@
 
 保存或清除凭据适用于此后 Create、Rebuild或 Reset生成的新容器。同一容器 Stop / Start 继续使用原凭据。需要立即失效时，到代码托管平台吊销令牌。删除 Workspace 或取消未派发的 Create 会清除控制面中的凭据。[凭据接口](api.md#workspace-仓库凭据)
 
-## 用户级 Codex 配置
+## 初始 Codex 文件
 
-默认关闭托管，首次读取时返回标准工作镜像预置的 TOML，其他文件内容为空。保存须提交当前修订及完整配置，修订冲突时先重新读取。已保存的修订与已应用的修订可分别查询。[配置接口](api.md#workspace-codex-文件)
-
-启用托管后，新容器在首次启动前取得配置。关闭托管时使用镜像内容。对现有容器的本地修改只在该容器中保留，控制台不会回读。同一容器的停启或重启保留内容。需要应用新配置并保留项目时使用 Rebuild。[托管决定](adr/0001-codex-home-managed-files.md)
-
-有排队或运行中的生命周期操作时，Workspace 拒绝更改 Codex 配置和仓库凭据。
+创建新 Workspace 时，控制面在首次启动前写入设置页配置的 `~/.codex/AGENTS.md` 和 `~/.codex/config.toml`。留空时使用镜像默认内容。保存后续设置只影响新建的 Workspace。Rebuild 和 Reset 保留 home 内的 Codex 文件与登录状态。[初始文件接口](api.md#路由与数据格式) · [持久化决定](adr/0003-workspace-home-volume.md)
 
 ## Git 快照
 

@@ -26,11 +26,11 @@ type Spec struct {
 }
 
 type Container struct {
-	ImageDigests []string              `json:"image_digests"`
 	ID           string                `json:"id"`
 	Name         string                `json:"name"`
 	Image        string                `json:"image"`
 	ImageID      string                `json:"image_id"`
+	ImageDigests []string              `json:"image_digests"`
 	State        string                `json:"state"`
 	PID          int                   `json:"pid"`
 	ExitCode     int                   `json:"exit_code"`
@@ -94,8 +94,8 @@ type Engine interface {
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Remove(context.Context, Spec) error
-	// Purge removes the project volume and optionally the SSH host key volume.
-	Purge(ctx context.Context, workspaceID string, includeSSHHostKey bool) error
+	// Purge removes the project volume and, when purgeAll is true, the home and SSH host key volumes.
+	Purge(ctx context.Context, workspaceID string, purgeAll bool) error
 	Run(context.Context, string, Exec) (int, error)
 	SSHHostKey(context.Context, string) (string, error)
 	SyncAuthorizedKeys(context.Context, string, []string) error

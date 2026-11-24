@@ -34,6 +34,13 @@ CREATE TABLE workspaces (
 );
 CREATE UNIQUE INDEX workspace_live_name ON workspaces(name) WHERE deleted_at IS NULL;
 
+CREATE TABLE workspace_repository_credentials (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+  host TEXT NOT NULL,
+  username TEXT NOT NULL,
+  token TEXT NOT NULL
+);
+
 CREATE TABLE containers (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   generation INTEGER NOT NULL,

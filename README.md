@@ -1,6 +1,6 @@
 # Cloudex
 
-Cloudex 是自托管的多主机 AI Coding Workspace 平台。管理员选择 Docker Host 创建 Workspace，再通过 Codex Desktop、原生 SSH 或 Web Terminal 使用同一工作树。
+Cloudex 是自托管的多主机 AI Coding Workspace 平台。管理员选择 Docker Host 创建 Workspace，再通过 Codex Desktop、原生 SSH 或 Web Terminal 使用同一工作树。项目和 home 目录分别保存在持久卷中。
 
 ## 项目现状
 

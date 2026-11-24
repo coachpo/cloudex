@@ -16,11 +16,11 @@ Cloudex 由一个控制面管理多台 Docker Host。每台 Host 上的 Agent �
 
 创建时由管理员选择 Host。控制面接受放置后预留资源，并异步执行操作。同一 Workspace 的变更串行。控制面保留未确认操作和最后观测，等待重新与 Agent 核对。[Workspace 生命周期](docs/workspace-lifecycle.md)
 
-原生 SSH 与 Codex Desktop 的连接彼此独立。浏览器终端经控制台会话鉴权后连接容器 PTY。三种入口共用项目文件。[SSH 接入与 Web Terminal](docs/workspace-access.md)
+原生 SSH 与 Codex Desktop 的连接彼此独立。浏览器终端经控制台会话鉴权后连接容器 PTY。三种入口共用项目文件和 home 目录，两个目录各有命名卷。[SSH 接入与 Web Terminal](docs/workspace-access.md)
 
 ## 接口与决定
 
 - [HTTP API](docs/api.md)给出路由、请求格式和领域契约的入口。
-- [ADR 0001](docs/adr/0001-codex-home-managed-files.md)记录 Codex 文件的托管、可见性和凭据保护取舍。
+- [ADR 0003](docs/adr/0003-workspace-home-volume.md)记录 home 持久卷、初始 Codex 文件和登录凭据的存放边界。
 - [ADR 0002](docs/adr/0002-workspace-repository-credential.md)记录 HTTPS 仓库令牌的使用范围、可见性与撤销边界。
 - [运维](docs/operations.md)说明部署、Host 注册、故障恢复和数据保留。

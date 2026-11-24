@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { accountMutationKey, APIError, api, change, hostImageReady, hostListQuery, hostPath, replaceSession, saveSetting, sessionQuery,
   settingsQuery, templatesQuery, workspaceImageDraft, publicKeyLines, type Session, type Settings } from "@/lib/api";
 import { hostName } from "@/lib/i18n";
-import { Empty, Facts, Notice } from "@/components/shared";
+import { Empty, Notice } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 
@@ -258,6 +258,49 @@ function SSHKeySettings() {
   </section>;
 }
 
+const initialCodexFilesQuery = {
+  queryKey: ["initial-codex-files"],
+  queryFn: ({ signal }: { signal: AbortSignal }) => api<InitialCodexFiles>("/settings/codex-files", { signal }),
+};
+type InitialCodexFiles = { agents_md: string; config_toml: string };
+
+function InitialCodexFileSettings() {
+  const { t } = useT();
+  const client = useQueryClient();
+  const q = useQuery(initialCodexFilesQuery);
+  const [draft, setDraft] = useState<Partial<InitialCodexFiles>>({});
+  const write = useMutation({
+    mutationFn: (files: InitialCodexFiles) => change("/settings/codex-files", "PUT", files),
+    onSuccess: () => setDraft({}),
+    onSettled: () => client.invalidateQueries({ queryKey: initialCodexFilesQuery.queryKey }),
+  });
+  const stored = q.data;
+  const files = stored && { ...stored, ...draft };
+  const fields = [["agents_md", "AGENTS.md"], ["config_toml", "config.toml"]] as const;
+  const canSave = stored && files && q.isSuccess && !write.isPending &&
+    fields.some(([key]) => files[key] !== stored[key]);
+  return <section className="panel" aria-labelledby="codex-files-heading">
+    <div className="section-head"><div><h2 id="codex-files-heading">{t("initialCodexFiles")}</h2>
+      <p>{t("initialCodexFilesHint")}</p></div></div>
+    {q.error && <Notice error={q.error} retry={() => q.refetch()}/>}
+    {files && <form className="form" onSubmit={e => { e.preventDefault(); if (canSave) write.mutate(files); }}>
+      <FieldGroup>
+        {fields.map(([key, label]) => <Field key={key} data-disabled={write.isPending}>
+          <FieldLabel htmlFor={key}>{label}</FieldLabel>
+          <textarea id={key} className="field font-mono" rows={5} spellCheck={false} maxLength={32768}
+            disabled={write.isPending} value={files[key]} onChange={e => {
+              setDraft({ ...draft, [key]: e.target.value });
+              write.reset();
+            }}/>
+        </Field>)}
+      </FieldGroup>
+      {write.error && <Notice error={write.error}/>}
+      {write.isSuccess && <p className="small muted" role="status">{t("initialCodexFilesSaved")}</p>}
+      <div className="actions"><Button disabled={!canSave}>{write.isPending ? t("saving") : t("saveInitialCodexFiles")}</Button></div>
+    </form>}
+  </section>;
+}
+
 export default function SettingsPage() {
   const { t } = useT();
   const session = useQuery({ ...sessionQuery, enabled: false });
@@ -269,10 +312,9 @@ export default function SettingsPage() {
       {session.data && <AccountSettings username={session.data.username}/>}
       <section className="panel"><div className="section-head"><h2>{t("workspaceDefaults")}</h2></div>
         {q.data && <WorkspaceImageSettings image={q.data.workspace_image} observedAt={q.dataUpdatedAt} unavailable={q.isError}/>}
-        <Facts items={[[t("cliAccount"),<code>codex login --device-auth</code>]]}/>
-        <p className="small muted mt-3">{t("managedCodexSignIn")}</p>
       </section>
       <SSHKeySettings/>
+      <InitialCodexFileSettings/>
       {q.data && <AccessSettings settings={q.data} observedAt={q.dataUpdatedAt} unavailable={q.isError}/>}
     </div>
   </>;

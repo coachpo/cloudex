@@ -7,7 +7,7 @@
 - 控制台和 API 已移除 Cloud Task、全局模型服务和 Codex 沙箱设置。通过 SSH、Web Terminal 或 Codex Desktop 使用 Workspace，Git 页可查看工作树快照。
 - 可为每个 Workspace 保存 HTTPS 仓库凭据。首次 clone 和后续 fetch、push 可复用令牌，控制台只回显配置状态和用户名。[仓库凭据](docs/workspace-lifecycle.md#仓库凭据)
 - 管理员在设置页统一管理 SSH 公钥，运行中的 Workspace 无需重建即可接收新公钥。Host 调度提供 Enabled、Cordon 和 Disabled。[SSH 连接](docs/operations.md#通过-ssh-连接-workspace)
-- 可在控制台编辑 Codex 托管文件。新容器可沿用保存的登录与配置，旧容器内的本地改动随容器替换而清除。[Codex 文件](docs/operations.md#管理-workspace-的-codex-文件)
+- Workspace home 改为命名卷，保留登录状态、Codex 会话和用户工具。全局初始 `AGENTS.md` 和 `config.toml` 只用于 Create。[数据保留](docs/operations.md#数据保留)
 
 ## 管理员账号与界面语言（未发布）
 

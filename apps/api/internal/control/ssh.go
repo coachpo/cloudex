@@ -203,7 +203,7 @@ func (c *Control) waitForSSH(ctx context.Context, engine runtime.Engine, id stri
 }
 
 func (c *Control) syncContainerSSHKeys(ctx context.Context, engine runtime.Engine, workspace, id string, afterSync func() error) error {
-	unlock, err := c.Store.LockWorkspace(ctx, workspace)
+	unlock, err := c.Store.LockSSHKeySync(ctx, workspace)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func (c *Control) syncHostSSHKeys(ctx context.Context, host string, engine runti
 func (c *Control) syncWorkspaceSSHKeys(ctx context.Context, w store.Workspace, engine runtime.Engine) error {
 	// Inspect under the same lock as Start so a new container cannot start
 	// with an older key list after this update skips a stopped generation.
-	unlock, err := c.Store.LockWorkspace(ctx, w.ID)
+	unlock, err := c.Store.LockSSHKeySync(ctx, w.ID)
 	if err != nil {
 		return err
 	}

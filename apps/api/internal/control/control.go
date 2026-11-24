@@ -268,8 +268,10 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 			}
 		}()
 		if ci.State == "created" {
-			if e = c.applyCodexConfig(ctx, engine, target, ci.ID); e != nil {
-				return "", nil, e
+			if o.Type == "create" {
+				if e = c.writeInitialCodexFiles(ctx, engine, target, ci.ID); e != nil {
+					return "", nil, e
+				}
 			}
 			if e = c.applyGitCredential(ctx, engine, target, ci.ID); e != nil {
 				return "", nil, e
@@ -460,4 +462,16 @@ func ReadOutput(fn func(io.Writer) error) (string, bool, error) {
 	var out capped
 	e := fn(&out)
 	return out.String(), out.truncated, e
+}
+
+func (c *Control) writeInitialCodexFiles(ctx context.Context, engine runtime.Engine, target runtime.Spec, id string) error {
+	files, err := c.Store.InitialCodexFiles(ctx)
+	if err != nil || files == (store.InitialCodexFiles{}) {
+		return err
+	}
+	writer, ok := engine.(runtime.InitialCodexFilesWriter)
+	if !ok {
+		return errors.New("the Workspace runtime cannot write initial Codex files")
+	}
+	return writer.WriteInitialCodexFiles(ctx, target, id, runtime.InitialCodexFiles(files))
 }

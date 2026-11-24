@@ -79,8 +79,8 @@ func (e *lifecycleEngine) Remove(_ context.Context, s runtime.Spec) error {
 	return nil
 }
 
-func (e *lifecycleEngine) Purge(_ context.Context, _ string, includeSSHHostKey bool) error {
-	if includeSSHHostKey {
+func (e *lifecycleEngine) Purge(_ context.Context, _ string, purgeAll bool) error {
+	if purgeAll {
 		e.purged = append(e.purged, "all volumes")
 	} else {
 		e.purged = append(e.purged, "project volume")

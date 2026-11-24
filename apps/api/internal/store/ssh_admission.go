@@ -55,6 +55,8 @@ func (g *workspaceGates) lock(ctx context.Context, id string) (func(), error) {
 	}
 }
 
-func (s *Store) LockWorkspace(ctx context.Context, id string) (func(), error) {
-	return s.admission.lock(ctx, id)
+// LockSSHKeySync orders key delivery to a Workspace with the Docker Start
+// that must run with the current keys.
+func (s *Store) LockSSHKeySync(ctx context.Context, id string) (func(), error) {
+	return s.sshKeySync.lock(ctx, id)
 }

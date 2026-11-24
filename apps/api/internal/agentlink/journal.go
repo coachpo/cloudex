@@ -205,15 +205,15 @@ func (a *executor) dockerMutation(ctx context.Context, req request) (any, error)
 			return nil, runtime.GitCredentialWriteError{Err: err}
 		}
 		return nil, nil
-	case "apply-codex-config":
-		if req.Spec == nil || req.CodexConfig == nil || req.ID == "" {
+	case "write-initial-codex-files":
+		if req.Spec == nil || req.InitialCodexFiles == nil || req.ID == "" {
 			return nil, errors.New("Workspace and Codex configuration are required")
 		}
-		writer, ok := a.Engine.(runtime.CodexConfigWriter)
+		writer, ok := a.Engine.(runtime.InitialCodexFilesWriter)
 		if !ok {
 			return nil, errors.New("the Host Agent cannot apply Codex configuration")
 		}
-		return nil, writer.ApplyCodexConfig(ctx, *req.Spec, req.ID, *req.CodexConfig)
+		return nil, writer.WriteInitialCodexFiles(ctx, *req.Spec, req.ID, *req.InitialCodexFiles)
 	case "ensure", "remove":
 		if req.Spec == nil {
 			return nil, errors.New("workspace specification required")
@@ -224,7 +224,7 @@ func (a *executor) dockerMutation(ctx context.Context, req request) (any, error)
 		c, err := a.Engine.Ensure(ctx, *req.Spec)
 		return encodeContainer(c), err
 	case "purge":
-		return nil, a.Engine.Purge(ctx, req.ID, req.IncludeSSHHostKey)
+		return nil, a.Engine.Purge(ctx, req.ID, req.PurgeAll)
 	}
 	if err := a.validateContainer(ctx, req.ID); err != nil {
 		return nil, err

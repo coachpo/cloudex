@@ -45,19 +45,18 @@ type frame struct {
 }
 
 type request struct {
-	AuthorizedKeys    []string       `json:"authorized_keys,omitempty"`
-	Method            string         `json:"method"`
-	ID                string         `json:"id,omitempty"`
-	Spec              *runtime.Spec  `json:"spec,omitempty"`
-	Address           netip.AddrPort `json:"address,omitempty"`
-	IncludeSSHHostKey bool           `json:"include_ssh_host_key,omitempty"`
-	OperationID       string         `json:"operation_id,omitempty"`
-	WorkspaceID       string         `json:"workspace_id,omitempty"`
-
-	Exec          *execRequest           `json:"exec,omitempty"`
-	Config        *AgentConfig           `json:"config,omitempty"`
-	GitCredential *runtime.GitCredential `json:"git_credential,omitempty"`
-	CodexConfig   *runtime.CodexConfig   `json:"codex_config,omitempty"`
+	Method            string                     `json:"method"`
+	ID                string                     `json:"id,omitempty"`
+	Spec              *runtime.Spec              `json:"spec,omitempty"`
+	Address           netip.AddrPort             `json:"address,omitempty"`
+	PurgeAll          bool                       `json:"purge_all,omitempty"`
+	OperationID       string                     `json:"operation_id,omitempty"`
+	WorkspaceID       string                     `json:"workspace_id,omitempty"`
+	Exec              *execRequest               `json:"exec,omitempty"`
+	Config            *AgentConfig               `json:"config,omitempty"`
+	GitCredential     *runtime.GitCredential     `json:"git_credential,omitempty"`
+	InitialCodexFiles *runtime.InitialCodexFiles `json:"initial_codex_files,omitempty"`
+	AuthorizedKeys    []string                   `json:"authorized_keys,omitempty"`
 }
 
 type execRequest struct {

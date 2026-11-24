@@ -60,16 +60,6 @@ export type Workspace = {
   assigned_host_id: string; disk_bytes: number;
   desired_state: string; observed_state: string; paused: boolean; generation: number; error: string; updated_at: string;
 };
-export type CodexConfigFields = {
-  managed: boolean;
-  agents_md: string;
-  config_toml: string;
-  auth_json: string;
-};
-export type WorkspaceCodexConfig = CodexConfigFields & {
-  revision: number;
-  applied_revision: number;
-};
 export type RepositoryCredentialStatus = { configured: boolean; username: string };
 export type Operation = {
   id: string; workspace_id: string; type: string; status: string; target_generation: number;
@@ -136,13 +126,6 @@ export type Metrics = { cpu_percent: number | null; memory_bytes: number; memory
 export const active = (state?: string) => state === "queued" || state === "running";
 export const workspaceState = (w: Workspace) => w.paused && w.observed_state === "stopped" ? "paused" : w.observed_state;
 export const wsPath = (id: string) => "/workspaces/" + encodeURIComponent(id);
-export const codexConfigPath = (id: string) => wsPath(id) + "/codex-config";
-export const codexConfigKey = (id: string) => ["codex-config", id] as const;
-export const codexConfigQuery = (id: string) => ({
-  queryKey: codexConfigKey(id),
-  queryFn: ({ signal }: { signal: AbortSignal }) => api<WorkspaceCodexConfig>(codexConfigPath(id), { signal }),
-  refetchInterval: 2500,
-});
 export const repositoryCredentialPath = (id: string) => wsPath(id) + "/repository-credential";
 export const repositoryCredentialKey = (id: string) => ["repository-credential", id] as const;
 export const repositoryCredentialQuery = (id: string) => ({

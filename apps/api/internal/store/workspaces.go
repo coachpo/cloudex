@@ -330,7 +330,6 @@ func (s *Store) finishOp(ctx context.Context, o Operation, state string, c *Cont
 			if e := writeRepositoryCredential(ctx, tx, o.WorkspaceID, nil); e != nil {
 				return e
 			}
-
 		}
 		if state == "deleted" || releaseCreate {
 			if e := resolveReservation(ctx, tx, o.WorkspaceID, state == "deleted" && !o.Purge); e != nil {
@@ -370,7 +369,6 @@ func (s *Store) CancelOp(ctx context.Context, id string) error {
 			if err := writeRepositoryCredential(ctx, tx, workspaceID, nil); err != nil {
 				return err
 			}
-
 			_, err = tx.ExecContext(ctx, `UPDATE workspaces SET desired_state='stopped',observed_state='deleted',deleted_at=?,updated_at=? WHERE id=?`, now(), now(), workspaceID)
 		}
 		return err

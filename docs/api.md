@@ -11,20 +11,19 @@
 | 初始化、登录、会话和修改账号 | [账号和 Cookie](../apps/api/internal/httpapi/auth.go) |
 | 默认镜像和接入地址 | [控制面设置](../apps/api/internal/httpapi/settings.go) |
 | Host 登记、凭据续发、调度状态、盘点、容量和并发 | [Host 接口](../apps/api/internal/httpapi/hosts.go)与[Host 状态](../apps/api/internal/store/hosts.go) |
+| 新 Workspace 的初始 Codex 文件 | [初始 Codex 文件](../apps/api/internal/httpapi/codex_files.go)与[生效时机](workspace-lifecycle.md#初始-codex-文件) |
 | Workspace 创建、放置、操作回执、历史、日志、指标与 Git | [Workspace 接口](../apps/api/internal/httpapi/workspaces.go)与[生命周期契约](workspace-lifecycle.md) |
-| `GET/PUT /settings/ssh-keys` 和 `GET /workspaces/{id}/access` | [公钥接口](../apps/api/internal/httpapi/ssh.go)与[SSH 接入契约](workspace-access.md#ssh-接入信息) |
+| 管理员公钥与 Workspace 连接信息 | [公钥接口](../apps/api/internal/httpapi/ssh.go)与[SSH 接入契约](workspace-access.md#ssh-接入信息) |
 
 首次初始化成功即建立会话。修改账号须验证当前密码，留空新密码可保留原密码。成功后旧会话失效，调用者须接受响应中的新 Cookie。[账号操作](operations.md#管理员账号)
 
 SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤销全部公钥。Workspace 的 Access 接口提供连接信息及是否配置公钥。在线 Host 下发失败时，返回 `SSH_KEY_SYNC_FAILED`，已保存的公钥列表仍用于 Gateway 鉴权。
 
+初始 Codex 文件设置接收 `agents_md` 和 `config_toml` 两个字符串。空字符串使用镜像对该文件的默认内容。
+
 SSH 主机名和 Agent 公开地址一起提交，空字符串清除对应设置。SSH 配置在主机名为空时使用绑定地址，新签发的注册材料使用当前 Agent 公开地址。默认工作镜像的修改立即适用于模板和新建的 Workspace。Host 可以报告多个镜像的放置就绪状态，实际 Docker 镜像清单另行查询。[默认工作镜像](operations.md#默认工作镜像)
 
 Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。容量变更保留已有预留，并发调整保留在途操作。新的派发受管理员设定值和 Agent 最近上报值中较小者约束。[磁盘预留](operations.md#主机磁盘预留容量) · [操作并发](operations.md#主机操作并发上限)
-
-## Workspace Codex 文件
-
-接口接受并返回托管文件的全文。输入格式与大小限制见[配置接口](../apps/api/internal/httpapi/codex_config.go)，修订冲突和生效时机见[用户级 Codex 配置](workspace-lifecycle.md#用户级-codex-配置)。
 
 ## Workspace 仓库凭据
 

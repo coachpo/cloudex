@@ -12,21 +12,23 @@ import (
 	"github.com/moby/moby/api/types/container"
 )
 
-func TestApplyCodexConfigArchivesFilesOnNewContainer(t *testing.T) {
+func TestWriteInitialCodexFilesArchivesFilesOnNewContainer(t *testing.T) {
 	const targetID = "workspace-container"
 	spec := Spec{WorkspaceID: "workspace", Generation: 1}
-	for _, authJSON := range []string{"", "{\"fixture\":\"fake-login\"}\n"} {
-		name := "with auth.json"
-		if authJSON == "" {
-			name = "without auth.json"
-		}
-		t.Run(name, func(t *testing.T) {
-			config := CodexConfig{AgentsMD: "# Project guidance\n", ConfigTOML: CodexConfigSeed, AuthJSON: authJSON}
+	for _, tc := range []struct {
+		name  string
+		files InitialCodexFiles
+	}{
+		{"both files", InitialCodexFiles{AgentsMD: "# Project guidance\n", ConfigTOML: CodexConfigSeed}},
+		{"instructions only", InitialCodexFiles{AgentsMD: "# Project guidance\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := tc.files
 			var writes atomic.Int32
 			d := dockerHTTPFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /v1.54/containers/cloudex-fixture-inst-workspace-g1/json":
-					writeCodexTargetInspect(w, targetID, "/cloudex-fixture-inst-workspace-g1", container.StateCreated)
+					writeWorkspaceInspect(w, targetID, "/cloudex-fixture-inst-workspace-g1", container.StateCreated)
 				case "PUT /v1.54/containers/" + targetID + "/archive":
 					writes.Add(1)
 					query := r.URL.Query()
@@ -42,14 +44,14 @@ func TestApplyCodexConfigArchivesFilesOnNewContainer(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 				}
 			})
-			if err := d.ApplyCodexConfig(t.Context(), spec, targetID, config); err != nil || writes.Load() != 1 {
+			if err := d.WriteInitialCodexFiles(t.Context(), spec, targetID, config); err != nil || writes.Load() != 1 {
 				t.Fatalf("config writes = %d, error = %v", writes.Load(), err)
 			}
 		})
 	}
 }
 
-func checkCodexArchive(t *testing.T, archive io.Reader, config CodexConfig) {
+func checkCodexArchive(t *testing.T, archive io.Reader, config InitialCodexFiles) {
 	t.Helper()
 	type file struct {
 		content string
@@ -58,8 +60,11 @@ func checkCodexArchive(t *testing.T, archive io.Reader, config CodexConfig) {
 	want := map[string]file{
 		"AGENTS.md": {config.AgentsMD, 0644}, "config.toml": {config.ConfigTOML, 0600},
 	}
-	if config.AuthJSON != "" {
-		want["auth.json"] = file{config.AuthJSON, 0600}
+	if config.ConfigTOML == "" {
+		delete(want, "config.toml")
+	}
+	if config.AgentsMD == "" {
+		delete(want, "AGENTS.md")
 	}
 	r := tar.NewReader(archive)
 	for {
@@ -82,11 +87,11 @@ func checkCodexArchive(t *testing.T, archive io.Reader, config CodexConfig) {
 		delete(want, header.Name)
 	}
 	if len(want) != 0 {
-		t.Error("archive omitted managed files")
+		t.Error("archive omitted initial files")
 	}
 }
 
-func TestApplyCodexConfigRejectsWrongOrPreviouslyStartedContainer(t *testing.T) {
+func TestWriteInitialCodexFilesRejectsWrongOrPreviouslyStartedContainer(t *testing.T) {
 	spec := Spec{WorkspaceID: "workspace", Generation: 1}
 	const id = "workspace-container"
 	const name = "/cloudex-fixture-inst-workspace-g1"
@@ -107,16 +112,16 @@ func TestApplyCodexConfigRejectsWrongOrPreviouslyStartedContainer(t *testing.T) 
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-				writeCodexTargetInspect(w, tc.id, tc.containerName, tc.state)
+				writeWorkspaceInspect(w, tc.id, tc.containerName, tc.state)
 			})
-			if err := d.ApplyCodexConfig(t.Context(), spec, id, CodexConfig{}); err == nil || errors.Is(err, ErrOwnership) != tc.wantOwnershipError {
+			if err := d.WriteInitialCodexFiles(t.Context(), spec, id, InitialCodexFiles{}); err == nil || errors.Is(err, ErrOwnership) != tc.wantOwnershipError {
 				t.Fatalf("unexpected config write result: %v", err)
 			}
 		})
 	}
 }
 
-func writeCodexTargetInspect(w http.ResponseWriter, id, name string, state container.ContainerState) {
+func writeWorkspaceInspect(w http.ResponseWriter, id, name string, state container.ContainerState) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(container.InspectResponse{
 		ID: id, Name: name, State: &container.State{Status: state, Running: state == container.StateRunning},

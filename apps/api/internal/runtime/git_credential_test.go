@@ -31,9 +31,9 @@ func TestApplyGitCredentialToNewWorkspace(t *testing.T) {
 			d := dockerHTTPFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /v1.54/containers" + name + "/json":
-					writeCodexTargetInspect(w, id, name, tc.state)
+					writeWorkspaceInspect(w, id, name, tc.state)
 				case "PUT /v1.54/containers/" + id + "/archive":
-					if tc.state != container.StateCreated || r.URL.Query().Get("path") != "/home/coder/.config/cloudex" || r.URL.Query().Has("copyUIDGID") {
+					if tc.state != container.StateCreated || r.URL.Query().Get("path") != "/etc/cloudex" || r.URL.Query().Has("copyUIDGID") {
 						t.Errorf("unexpected credential copy request: %s", r.URL)
 						w.WriteHeader(http.StatusBadRequest)
 						return

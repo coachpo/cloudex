@@ -88,11 +88,12 @@ func (d *Docker) owns(labels map[string]string, id string) bool {
 const (
 	workspaceMount  = "/workspace"
 	sshHostKeyMount = "/var/lib/cloudex-ssh"
+	homeMount       = "/home/coder"
 )
 
-func volumeNames(id string) [2]string {
-	name := "cloudex-" + id
-	return [2]string{name + "-data", name + "-ssh"}
+func (d *Docker) volumeNames(id string) [3]string {
+	base := d.name(id)
+	return [3]string{base + "-data", base + "-ssh", base + "-home"}
 }
 
 // ManagedWorkspace identifies the Workspace that owns an exact Docker ID.
@@ -232,7 +233,7 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
 	} else if e != nil {
 		return Container{}, e
 	}
-	names := volumeNames(s.WorkspaceID)
+	names := d.volumeNames(s.WorkspaceID)
 	labels := d.labels(s.WorkspaceID)
 	labels[generationLabel] = strconv.Itoa(s.Generation)
 	init := true
@@ -249,7 +250,7 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (Container, error) {
 		LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}},
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 	}
-	for i, target := range []string{workspaceMount, sshHostKeyMount} {
+	for i, target := range []string{workspaceMount, sshHostKeyMount, homeMount} {
 		name := names[i]
 		if err := d.ensureVolume(ctx, name, s.WorkspaceID); err != nil {
 			return Container{}, err
@@ -290,10 +291,10 @@ func (d *Docker) Remove(ctx context.Context, s Spec) error {
 	}
 	return e
 }
-func (d *Docker) Purge(ctx context.Context, id string, includeSSHHostKey bool) error {
-	names := volumeNames(id)
+func (d *Docker) Purge(ctx context.Context, id string, purgeAll bool) error {
+	names := d.volumeNames(id)
 	selected := names[:1]
-	if includeSSHHostKey {
+	if purgeAll {
 		selected = names[:]
 	}
 	for _, n := range selected {
@@ -318,7 +319,7 @@ func (d *Docker) NoWorkspaceArtifacts(ctx context.Context, s Spec) (bool, error)
 	if _, err := d.Inspect(ctx, s); !errors.Is(err, ErrMissing) {
 		return false, err
 	}
-	for _, name := range volumeNames(s.WorkspaceID) {
+	for _, name := range d.volumeNames(s.WorkspaceID) {
 		if _, err := d.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
 			return false, err
 		}
