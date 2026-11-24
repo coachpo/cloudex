@@ -1,0 +1,80 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    environment:
+      CLOUDEX_ADDR: 0.0.0.0:8080
+      CLOUDEX_WEB_URL: http://web:3000
+      CLOUDEX_ORIGIN: ${CLOUDEX_ORIGIN:-http://localhost:3000}
+      CLOUDEX_MASTER_KEY: ${CLOUDEX_MASTER_KEY:?Set CLOUDEX_MASTER_KEY in .env}
+      CLOUDEX_DB_PATH: /data/cloud.sqlite
+      CLOUDEX_SSH_BIND: ${CLOUDEX_SSH_BIND:-127.0.0.1}
+      CLOUDEX_SSH_PORT: ${CLOUDEX_SSH_PORT:-2222}
+      CLOUDEX_GATEWAY_ADDR: 0.0.0.0:2222
+      CLOUDEX_SSH_NETWORK: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
+      CLOUDEX_AGENT_LISTEN: 0.0.0.0:9443
+      CLOUDEX_AGENT_BOOTSTRAP_SOCKET: /bootstrap/enroll.sock
+    volumes:
+      - cloud-db:/data
+      - agent-bootstrap:/bootstrap
+    ports:
+      - "127.0.0.1:${CLOUDEX_PORT:-3000}:8080"
+      - "${CLOUDEX_SSH_BIND:-127.0.0.1}:${CLOUDEX_SSH_PORT:-2222}:2222"
+      - "${CLOUDEX_AGENT_BIND:-127.0.0.1}:${CLOUDEX_AGENT_PORT:-9443}:9443"
+    depends_on:
+      - web
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      start_period: 5s
+      start_interval: 1s
+      timeout: 3s
+      retries: 3
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      target: agent
+    environment:
+      CLOUDEX_AGENT_ADDRESS: api:9443
+      CLOUDEX_AGENT_BOOTSTRAP_SOCKET: /bootstrap/enroll.sock
+      CLOUDEX_AGENT_STATE_DIR: /agent
+      CLOUDEX_SSH_NETWORK: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-local:/agent
+      - agent-bootstrap:/bootstrap:ro
+    networks:
+      - default
+      - workspaces
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+
+  workspace-image:
+    profiles: ["build"]
+    image: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.workspace
+    command: ["true"]
+
+volumes:
+  cloud-db:
+  agent-local:
+  agent-bootstrap:
+
+networks:
+  workspaces:
+    name: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
+    driver: bridge

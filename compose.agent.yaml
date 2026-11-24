@@ -1,0 +1,41 @@
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      target: agent
+    environment:
+      CLOUDEX_AGENT_ADDRESS: ${CLOUDEX_AGENT_ADDRESS:-}
+      CLOUDEX_AGENT_ENROLLMENT_TOKEN: ${CLOUDEX_AGENT_ENROLLMENT_TOKEN:-}
+      CLOUDEX_AGENT_CA_FILE: /etc/cloudex/agent-ca.pem
+      CLOUDEX_AGENT_STATE_DIR: /agent
+      CLOUDEX_SSH_NETWORK: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-state:/agent
+      - type: bind
+        source: ${CLOUDEX_AGENT_CA_PATH:-./agent-ca.pem}
+        target: /etc/cloudex/agent-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - default
+      - workspaces
+    restart: unless-stopped
+
+  workspace-image:
+    profiles: ["build"]
+    image: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.workspace
+    command: ["true"]
+
+volumes:
+  agent-state:
+
+networks:
+  workspaces:
+    name: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
+    driver: bridge
