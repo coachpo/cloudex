@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.DS_Store
+.taste-skill/
+.playwright-cli/
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+/data/
+/bin/
+__pycache__/

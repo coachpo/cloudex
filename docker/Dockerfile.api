@@ -1,0 +1,17 @@
+FROM golang:1.27.4-trixie AS build
+WORKDIR /build
+COPY apps/api/go.mod apps/api/go.sum ./
+RUN go mod download
+COPY apps/api/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cloudex-server ./cmd/server
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cloudex-agent ./cmd/host-agent
+
+FROM debian:trixie-slim AS agent
+COPY --from=build /out/cloudex-agent /usr/local/bin/cloudex-agent
+ENTRYPOINT ["cloudex-agent"]
+
+FROM debian:trixie-slim AS api
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/cloudex-server /usr/local/bin/cloudex-server
+ENTRYPOINT ["cloudex-server"]

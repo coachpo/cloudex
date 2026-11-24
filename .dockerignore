@@ -1,0 +1,7 @@
+.git
+.env*
+.taste-skill
+**/node_modules
+**/.next
+data
+bin

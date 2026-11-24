@@ -1,0 +1,19 @@
+Port 2222
+ListenAddress 0.0.0.0
+HostKey /var/lib/cloudex-ssh/ssh_host_ed25519_key
+PidFile /run/cloudex-ssh/sshd.pid
+AuthorizedKeysFile /run/cloudex-ssh/authorized_keys
+AllowUsers coder
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+StrictModes yes
+AllowAgentForwarding no
+X11Forwarding no
+AllowTcpForwarding local
+AllowStreamLocalForwarding local
+PermitUserEnvironment no
+Subsystem sftp internal-sftp

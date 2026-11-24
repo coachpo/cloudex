@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package cloudex.agent.v1;
+
+import "google/protobuf/wrappers.proto";
+
+// The v1 envelope carries versioned JSON frames. Connect carries heartbeat
+// and dispatch frames, and each dispatched call gets its own Exchange stream.
+service AgentLink {
+  rpc Connect(stream google.protobuf.BytesValue) returns (stream google.protobuf.BytesValue);
+  rpc Exchange(stream google.protobuf.BytesValue) returns (stream google.protobuf.BytesValue);
+}
