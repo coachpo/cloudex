@@ -20,7 +20,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch("/api/v1" + path, { ...init, headers, cache: "no-store" });
   if (response.status === 204) return undefined as T;
   const json = await response.json().catch(() => null);
-  if (!response.ok || !json || !("data" in json)) {
+  if (!response.ok || json === null || typeof json !== "object" || !("data" in json)) {
     throw new APIError(response.status, json?.error?.message ?? noResponseMessage, json?.error?.code);
   }
   return json.data as T;

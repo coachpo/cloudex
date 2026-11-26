@@ -4,7 +4,8 @@ import { Translation, useT } from "@/components/i18n-provider";
 import { hostName } from "@/lib/i18n";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Clock, Copy, Download, KeyRound, RadioTower } from "lucide-react";
 import { change, hostListQuery, hostPath, hostQuery, stamp, type Host, type HostEnrollment } from "@/lib/api";
 import { Button } from "./ui/button";
 import { Field, FieldGroup, FieldLabel } from "./ui/field";
@@ -33,7 +34,7 @@ function EnrollmentInstructions({ enrollment, onDone }: { enrollment: HostEnroll
   }
 
   return <div className="form">
-    <p><Translation id="enrollBefore" values={{ host: <strong>{hostName(t, enrollment.host)}</strong>, time: stamp(locale, enrollment.expires_at) }}/></p>
+    <p className="notice info"><Clock aria-hidden="true"/><span className="notice-body"><Translation id="enrollBefore" values={{ host: <strong>{hostName(t, enrollment.host)}</strong>, time: stamp(locale, enrollment.expires_at) }}/></span></p>
     <FieldGroup className="form">
       <Field className="fields">
         <FieldLabel htmlFor="enrollment-token">{t("enrollmentToken")}</FieldLabel>
@@ -46,10 +47,10 @@ function EnrollmentInstructions({ enrollment, onDone }: { enrollment: HostEnroll
     </FieldGroup>
     <div className="actions">
       {typeof navigator !== "undefined" && navigator.clipboard &&
-        <Button type="button" variant="outline" onClick={copyToken}>{copied ? t("tokenCopied") : t("copyToken")}</Button>}
-      <Button type="button" variant="outline" onClick={() => downloadCertificate(enrollment.ca_certificate)}>{t("downloadCa")}</Button>
+        <Button type="button" variant="outline" onClick={copyToken}>{copied ? <Check data-icon="inline-start"/> : <Copy data-icon="inline-start"/>}{copied ? t("tokenCopied") : t("copyToken")}</Button>}
+      <Button type="button" variant="outline" onClick={() => downloadCertificate(enrollment.ca_certificate)}><Download data-icon="inline-start"/>{t("downloadCa")}</Button>
     </div>
-    <ol className="flex list-decimal flex-col gap-3 pl-5 small wide-code">
+    <ol className="steps wide-code">
       <li><Translation id="saveCaFile" values={{ certificate: <code>agent-ca.pem</code>, compose: <code>compose.agent.yaml</code> }}/>
         <pre className="log mt-2"><code>docker compose -f compose.agent.yaml build workspace-image</code></pre></li>
       <li><Translation id="setEnrollmentEnv" values={{ address: <code>CLOUDEX_AGENT_ADDRESS</code>, token: <code>CLOUDEX_AGENT_ENROLLMENT_TOKEN</code>,
@@ -69,6 +70,7 @@ export function HostEnrollmentPanel({ host, onClose }: { host?: Host; onClose: (
   const client = useQueryClient();
   const [method, setMethod] = useState<"agent" | "ssh">(host?.connection_type ?? "ssh");
   const [sshPending, setSSHPending] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
   const mutation = useMutation({
     gcTime: 0,
     mutationFn: (name: string) => host
@@ -79,19 +81,21 @@ export function HostEnrollmentPanel({ host, onClose }: { host?: Host; onClose: (
       void client.invalidateQueries({ queryKey: hostListQuery.queryKey });
     },
   });
+  const enrollment = mutation.data;
+  useEffect(() => { heading.current?.focus(); }, [enrollment]);
 
   function close() {
     mutation.reset();
     onClose();
   }
 
-  return <section className="panel" aria-labelledby="enrollment-heading">
-    <div className="section-head"><h2 id="enrollment-heading">{mutation.data ? t("connectHostAgent") : host ? t(method === "ssh" ? "updateHostSSH" : "issueAToken") : t("addHost")}</h2></div>
-    {!host && !mutation.data && <fieldset className="mb-4" disabled={sshPending || mutation.isPending}>
-      <legend className="small mb-2">{t("connectionMethod")}</legend>
-      <div className="actions">
-        <label className="label-inline"><input type="radio" name="connection" checked={method === "ssh"} onChange={() => setMethod("ssh")}/> {t("sshDirect")}</label>
-        <label className="label-inline"><input type="radio" name="connection" checked={method === "agent"} onChange={() => setMethod("agent")}/> Agent</label>
+  return <section className="panel enrollment" aria-labelledby="enrollment-heading">
+    <div className="section-head"><h2 ref={heading} id="enrollment-heading" tabIndex={-1}>{enrollment ? t("connectHostAgent") : host ? t(method === "ssh" ? "updateHostSSH" : "issueAToken") : t("addHost")}</h2></div>
+    {!host && !mutation.data && <fieldset className="mb-5 grid gap-2" disabled={sshPending || mutation.isPending}>
+      <legend className="mb-2 font-medium">{t("connectionMethod")}</legend>
+      <div className="choice-group">
+        <label className="choice"><input type="radio" name="connection" checked={method === "ssh"} onChange={() => setMethod("ssh")}/><KeyRound size={16} aria-hidden="true"/> {t("sshDirect")}</label>
+        <label className="choice"><input type="radio" name="connection" checked={method === "agent"} onChange={() => setMethod("agent")}/><RadioTower size={16} aria-hidden="true"/> Agent</label>
       </div>
     </fieldset>}
     {method === "ssh" ? <HostSSHForm host={host} pending={sshPending} setPending={setSSHPending} onClose={close}/> :
@@ -100,11 +104,11 @@ export function HostEnrollmentPanel({ host, onClose }: { host?: Host; onClose: (
         e.preventDefault();
         mutation.mutate(String(new FormData(e.currentTarget).get("name") ?? "").trim());
       }}>
-        {host ? <p className="small muted">{t("renewEnrollmentHint", { host: hostName(t, host) })}</p> :
+        {host ? <p className="muted">{t("renewEnrollmentHint", { host: hostName(t, host) })}</p> :
           <FieldGroup className="form">
             <Field className="fields">
               <FieldLabel htmlFor="host-name">{t("hostName")}</FieldLabel>
-              <input className="field" id="host-name" name="name" required maxLength={64} placeholder={t("hostNameExample")} autoFocus/>
+              <input className="field" id="host-name" name="name" required maxLength={64} placeholder={t("hostNameExample")}/>
             </Field>
           </FieldGroup>}
         {mutation.error && <Notice error={mutation.error}/>}

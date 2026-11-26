@@ -24,9 +24,11 @@ async page => {
     if (key === "Tab" && !(await username.evaluate(input => input === document.activeElement))) {
       throw new Error("Tab did not move focus from the menu to Username");
     }
-    const triggerFocused = await trigger.evaluate(button => button === document.activeElement);
-    if (triggerFocused !== (key === "Escape")) {
-      throw new Error(`${key} incorrectly ${triggerFocused ? "restored" : "left"} focus on the theme button`);
+    if (key === "Escape") {
+      // Closing hides the menu before Radix restores focus.
+      await trigger.and(page.locator(":focus")).waitFor({ timeout: 5000 });
+    } else if (await trigger.evaluate(button => button === document.activeElement)) {
+      throw new Error(`${key} incorrectly restored focus to the theme button`);
     }
   }
   return "PASS theme menu Tab and Shift+Tab exit; Escape restores focus";

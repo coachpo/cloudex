@@ -4,9 +4,9 @@ import { useT } from "@/components/i18n-provider";
 import { hostName, localizeSSHMessage, type MessageKey } from "@/lib/i18n";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Empty, Facts, Notice, Status } from "./shared";
+import { CircleAlert, Clock, Container, Info, KeyRound, Layers, Plus, RadioTower, RotateCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Empty, Facts, Loading, MetaItem, Meter, Notice, PageHeader, Status } from "./shared";
 import { HostEnrollmentPanel } from "./host-enrollment";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "./ui/alert-dialog";
@@ -28,60 +28,68 @@ export function HostDetail({ id }: { id: string }) {
   });
   const settings = useQuery(settingsQuery);
   const [issuing, setIssuing] = useState(false);
+  const enrollmentTrigger = useRef<HTMLButtonElement>(null);
+  const hostTitle = useRef<HTMLHeadingElement>(null);
   const info = host.data;
   const image = settings.data?.workspace_image;
+  const kind = info ? info.id === "local" ? t("controlPlaneHost") : info.connection_type === "ssh" ? t("sshDirect") : t("remoteHost") : "";
   return <>
-    <div className="title">
-      <div><Link className="back link" href="/hosts">{t("backHosts")}</Link>
-        <h1>{info ? hostName(t, info) : t("host")}{info && <Status state={info.status}/>}</h1>
-        {info?.last_seen && <p>{t("lastSeenTime", { time: stamp(locale, info.last_seen) })}</p>}
-      </div>
-      {info && <div className="actions">
+    <PageHeader crumbs={[{ href: "/hosts", label: t("hosts") }]} current={info ? hostName(t, info) : undefined}
+      titleRef={hostTitle} title={info ? hostName(t, info) : t("host")} status={info && <Status state={info.status}/>}
+      meta={info && <>
+        <MetaItem icon={info.connection_type === "ssh" ? KeyRound : RadioTower}>{info.connection_type === "ssh" && info.ssh_address ? <>{kind} · <code>{info.ssh_address}</code></> : kind}</MetaItem>
+        {info.engine && <MetaItem icon={Container}>Docker {info.engine}</MetaItem>}
+        {info.last_seen && <MetaItem icon={Clock}>{t("lastSeenTime", { time: stamp(locale, info.last_seen) })}</MetaItem>}
+      </>}
+      actions={info && <>
         <Button asChild variant="outline"><Link href={hostWorkspacePath("/workspaces", id)}>{t("viewWorkspaces")}</Link></Button>
+        {info.connection_type === "agent" && info.id !== "local" && info.scheduling_state !== "disabled" && (info.status === "enrolling" || info.status === "offline") &&
+          <Button ref={enrollmentTrigger} aria-expanded={issuing} aria-disabled={issuing} type="button" variant="outline" className="aria-disabled:opacity-50"
+            onClick={() => { if (!issuing) setIssuing(true); }}>{t("issueNewToken")}</Button>}
+        {info.connection_type === "ssh" && info.scheduling_state !== "disabled" && (info.status === "offline" || info.status === "degraded") &&
+          <Button type="button" variant="outline" onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
+            <RotateCw data-icon="inline-start"/>{t(reconnect.isPending ? "hostSSHConnecting" : "retryHostSSH")}
+          </Button>}
+        {info.connection_type === "ssh" && <Button ref={enrollmentTrigger} aria-expanded={issuing} aria-disabled={issuing}
+          type="button" variant="outline" className="aria-disabled:opacity-50"
+          onClick={() => { if (!issuing) setIssuing(true); }}>{t("updateHostSSH")}</Button>}
         {image && canPlaceOnHost(info, image) && <Button asChild><Link href={hostWorkspacePath("/workspaces/new", id)}>
           <Plus data-icon="inline-start"/>{t("newWorkspace")}
         </Link></Button>}
-        {info.connection_type === "agent" && info.id !== "local" && info.scheduling_state !== "disabled" && (info.status === "enrolling" || info.status === "offline") &&
-          <Button disabled={issuing} type="button" onClick={() => setIssuing(true)}>{t("issueNewToken")}</Button>}
-        {info.connection_type === "ssh" && info.scheduling_state !== "disabled" && (info.status === "offline" || info.status === "degraded") &&
-          <Button type="button" variant="outline" onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
-            {t(reconnect.isPending ? "hostSSHConnecting" : "retryHostSSH")}
-          </Button>}
-        {info.connection_type === "ssh" && <Button disabled={issuing} type="button" variant="outline" onClick={() => setIssuing(true)}>{t("updateHostSSH")}</Button>}
-      </div>}
-    </div>
+      </>}/>
     {host.error && <Notice error={host.error} retry={() => host.refetch()}/>}
     {reconnect.error && <Notice error={reconnect.error}/>}
     {reconnect.isSuccess && (info?.status === "offline" || info?.status === "degraded") && info.scheduling_state !== "disabled" &&
-      <p className="small muted" role="status">{t("hostReconnectRequested")}</p>}
-    {info?.connection_error && <p role="alert" className="notice">{localizeSSHMessage(locale, info.connection_error)}</p>}
-    {issuing && info && <HostEnrollmentPanel key={info.id} host={info} onClose={() => setIssuing(false)}/>}
-    {info ? <>
-      <HostSchedulingPanel host={info}/>
-      <div className="two-up">
-        <div className="view-grid">
-          <Capacity key={info.id} info={info}/>
-          <HostContainers host={info}/>
-          <HostImages host={info}/>
-        </div>
-        <div className="view-grid">
-          <section className="panel" aria-labelledby="engine-heading">
-            <div className="section-head"><h2 id="engine-heading">{t("dockerEngine")}</h2></div>
-            <Facts items={[
-              [t("version"), info.engine || null],
-              [t("osArch"), [info.os, info.arch].filter(Boolean).join(" · ") || null],
-              info.connection_type === "ssh"
-                ? [t("sshDirect"), `${info.ssh_user}@${info.ssh_address}`]
-                : [t("agentVersion"), info.agent_version || null],
-              [t("runningContainers"), info.engine ? t("runningContainerCount", { running: info.running_containers.toLocaleString(locale), total: info.total_containers.toLocaleString(locale) }) : null],
-              [t("defaultWorkspaceImage"), image ? <><code>{image}</code>
-                <span className="entry-secondary">{hostImageReady(info, image) ? t("state.ready") : t("workspaceImageNotReady")}</span></> : null],
-            ]}/>
-          </section>
-          <OperationLimit key={info.id} info={info} observedAt={host.dataUpdatedAt} unavailable={host.isError}/>
-        </div>
+      <p className="notice info" role="status"><RotateCw aria-hidden="true"/><span className="notice-body">{t("hostReconnectRequested")}</span></p>}
+    {info?.connection_error && <p role="alert" className="notice"><CircleAlert aria-hidden="true"/><span className="notice-body">{localizeSSHMessage(locale, info.connection_error)}</span></p>}
+    {issuing && info && <HostEnrollmentPanel key={info.id} host={info} onClose={() => {
+      setIssuing(false);
+      (enrollmentTrigger.current ?? hostTitle.current)?.focus();
+    }}/>}
+    {info ? <div className="two-up">
+      <div className="stack-lg">
+        <Capacity key={info.id} info={info}/>
+        <HostContainers host={info}/>
+        <HostImages host={info}/>
       </div>
-    </> : host.isPending && <Empty>{t("loadingHost")}</Empty>}
+      <div className="stack-lg">
+        <HostSchedulingPanel host={info}/>
+        <section className="panel" aria-labelledby="engine-heading">
+          <div className="section-head"><h2 id="engine-heading">{t("dockerEngine")}</h2></div>
+          <Facts items={[
+            [t("version"), info.engine || null],
+            [t("osArch"), [info.os, info.arch].filter(Boolean).join(" · ") || null],
+            info.connection_type === "ssh"
+              ? [t("sshDirect"), <code key="ssh">{info.ssh_user}@{info.ssh_address}</code>]
+              : [t("agentVersion"), info.agent_version || null],
+            [t("runningContainers"), info.engine ? t("runningContainerCount", { running: info.running_containers.toLocaleString(locale), total: info.total_containers.toLocaleString(locale) }) : null],
+            [t("defaultWorkspaceImage"), image ? <><code>{image}</code>
+              <span className="mt-1 block"><Status state={hostImageReady(info, image) ? "ready" : ""} label={hostImageReady(info, image) ? t("state.ready") : t("workspaceImageNotReady")}/></span></> : null],
+          ]}/>
+        </section>
+        <OperationLimit key={info.id} info={info} observedAt={host.dataUpdatedAt} unavailable={host.isError}/>
+      </div>
+    </div> : host.isPending && <section className="panel"><Loading label={t("loadingHost")} rows={4}/></section>}
   </>;
 }
 
@@ -120,11 +128,12 @@ function HostSchedulingPanel({ host }: { host: Host }) {
   const scheduling = host.scheduling_state;
   return <section className="panel view-grid" aria-labelledby="scheduling-heading">
     <div className="section-head mb-0">
-      <div><h2 id="scheduling-heading">{t("hostScheduling")}</h2><p>{t(schedulingDescription[scheduling])}</p></div>
+      <h2 id="scheduling-heading">{t("hostScheduling")}</h2>
       <Status state={scheduling}/>
     </div>
+    <p className="muted">{t(schedulingDescription[scheduling])}</p>
     <div className="actions">
-      {scheduling === "enabled" && <Button type="button" onClick={() => mode.mutate("cordoned")} disabled={mode.isPending}>
+      {scheduling === "enabled" && <Button type="button" variant="outline" onClick={() => mode.mutate("cordoned")} disabled={mode.isPending}>
         {t("cordonHost")}
       </Button>}
       {scheduling !== "enabled" &&
@@ -132,13 +141,13 @@ function HostSchedulingPanel({ host }: { host: Host }) {
           {t("resumeScheduling")}
         </Button>}
       {scheduling !== "disabled" && <AlertDialog>
-        <AlertDialogTrigger asChild><Button type="button" variant="ghost" disabled={mode.isPending}>{t("disableHost")}</Button></AlertDialogTrigger>
+        <AlertDialogTrigger asChild><Button type="button" variant="destructive" disabled={mode.isPending}>{t("disableHost")}</Button></AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t("disableHostTitle", { name: hostName(t, host) })}</AlertDialogTitle>
             <AlertDialogDescription>{t("disableHostEffects")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>{t("keepHost")}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => mode.mutate("disabled")}>{t("disableHost")}</AlertDialogAction>
+            <AlertDialogAction variant="danger" onClick={() => mode.mutate("disabled")}>{t("disableHost")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>}
@@ -181,10 +190,10 @@ function OperationLimit({ info, observedAt, unavailable }: { info: Host; observe
       [t("hostOperationTarget"), target.toLocaleString(locale)],
       [t("hostOperationActual"), info.last_seen ? actual.toLocaleString(locale) : null],
     ]}/>
-    {target !== actual && <p className="small muted mt-2" role="status">
+    {target !== actual && <p className="hint mt-3" role="status"><Info aria-hidden="true"/>
       {t(info.last_seen ? "operationLimitApplying" : "operationLimitWaitingForHost")}
     </p>}
-    <form className="form mt-3" noValidate onSubmit={e => {
+    <form className="form mt-4 border-t border-border pt-4" noValidate onSubmit={e => {
       e.preventDefault();
       if (valid && limit !== target && !save.isPending && !unavailable) save.mutate(limit);
     }}>
@@ -288,18 +297,14 @@ function Capacity({ info }: { info: Host }) {
     <div className="section-head"><div><h2 id="capacity-heading">{t("workspaceCapacity")}</h2>
       {info.last_seen && !hostReady(info) && <p>{t("lastReportedCapacity")}</p>}
       {!info.last_seen && <p>{t("capacityPending")}</p>}</div></div>
-    <table className="data-table">
-      <thead><tr><th scope="col">{t("resource")}</th><th scope="col" className="numeric on-wide">{t("allocatable")}</th>
-        <th scope="col" className="numeric">{t("reserved")}</th><th scope="col" className="numeric">{t("available")}</th></tr></thead>
-      <tbody>{resources.map(({ label, key, format }) => <tr key={key}>
-        <th scope="row">{t(label)}<span className="entry-secondary mobile-meta">{t("allocatableAmount", { amount: format(allocatable[key], locale) })}</span></th>
-        <td className="numeric on-wide">{format(allocatable[key], locale)}</td>
-        <td className="numeric">{format(reserved[key], locale)}</td>
-        <td className="numeric">{format(available[key], locale)}</td>
-      </tr>)}</tbody>
-    </table>
+    <div className="grid gap-5">{resources.map(({ label, key, format }) => <div className="meter-row" key={key}>
+      <div className="meter-figures"><span className="font-medium text-[var(--ink)]">{t(label)}</span>
+        <span>{t("available")} <strong>{format(available[key], locale)}</strong></span></div>
+      <Meter value={reserved[key]} total={allocatable[key]} warnWhenFull label={`${t(label)}: ${t("reserved")} ${format(reserved[key], locale)}, ${t("allocatable")} ${format(allocatable[key], locale)}`}/>
+      <div className="meter-figures"><span>{t("reserved")} {format(reserved[key], locale)}</span><span>{t("allocatable")} {format(allocatable[key], locale)}</span></div>
+    </div>)}</div>
     {capacity.error && <Notice error={capacity.error} retry={() => capacity.refetch()}/>}
-    <form className="mt-3" onSubmit={e => {
+    <form className="mt-5 border-t border-border pt-4" onSubmit={e => {
       e.preventDefault();
       if (bytes !== undefined && bytes !== current && !save.isPending) save.mutate(bytes);
     }}>
@@ -333,17 +338,17 @@ function HostContainers({ host }: { host: Host }) {
     refetchInterval: 6000, enabled: hostReady(host) });
   return <section className="panel" aria-labelledby="containers-heading">
       <div className="section-head"><h2 id="containers-heading">{t("containerInventory")}</h2></div>
-      {!hostReady(host) ? <Empty>{t("containersUnavailable")}</Empty> :
+      {!hostReady(host) ? <Empty icon={Container}>{t("containersUnavailable")}</Empty> :
         c.error ? <Notice error={c.error} retry={() => c.refetch()}/> :
-        !c.data ? <Empty>{t("loadingContainers")}</Empty> : !c.data.length ? <Empty>{t("noHostContainers")}</Empty> :
-        <table className="data-table"><thead><tr><th scope="col">{t("container")}</th><th scope="col">{t("state")}</th><th scope="col" className="on-wide">{t("scope")}</th></tr></thead>
+        !c.data ? <Loading label={t("loadingContainers")}/> : !c.data.length ? <Empty icon={Container}>{t("noHostContainers")}</Empty> :
+        <div className="table-wrap"><table className="data-table"><thead><tr><th scope="col">{t("container")}</th><th scope="col">{t("state")}</th><th scope="col" className="on-wide">{t("scope")}</th></tr></thead>
           <tbody>{c.data.map(v => <tr key={v.id}><td>
             {v.workspace_id ? <Link className="entry-link link" href={wsPath(v.workspace_id)}>{v.name}</Link> :
-              <span className="entry-link">{v.name || v.id.slice(0, 12)}</span>}
-            <span className="entry-secondary">{v.image}</span>
+              <span className="entry-link font-medium">{v.name || v.id.slice(0, 12)}</span>}
+            <code className="entry-secondary">{v.image}</code>
             <span className="entry-secondary mobile-meta">{v.workspace_id ? t("managed") : t("readOnly")}</span></td>
             <td><Status state={v.state}/></td><td className="on-wide">{v.workspace_id ? t("managed") : t("readOnly")}</td>
-          </tr>)}</tbody></table>}
+          </tr>)}</tbody></table></div>}
   </section>;
 }
 
@@ -353,16 +358,16 @@ function HostImages({ host }: { host: Host }) {
     refetchInterval: 12000, enabled: hostReady(host) });
   return <section className="panel" aria-labelledby="images-heading">
       <div className="section-head"><h2 id="images-heading">{t("localImages")}</h2></div>
-      {!hostReady(host) ? <Empty>{t("imagesUnavailable")}</Empty> :
+      {!hostReady(host) ? <Empty icon={Layers}>{t("imagesUnavailable")}</Empty> :
         i.error ? <Notice error={i.error} retry={() => i.refetch()}/> :
-        !i.data ? <Empty>{t("loadingImages")}</Empty> : !i.data.length ? <Empty>{t("noLocalImages")}</Empty> :
-        <table className="data-table"><thead><tr><th scope="col">{t("tags")}</th><th scope="col" className="on-wide">{t("imageId")}</th>
+        !i.data ? <Loading label={t("loadingImages")}/> : !i.data.length ? <Empty icon={Layers}>{t("noLocalImages")}</Empty> :
+        <div className="table-wrap"><table className="data-table"><thead><tr><th scope="col">{t("tags")}</th><th scope="col" className="on-wide">{t("imageId")}</th>
           <th scope="col" className="numeric">{t("size")}</th></tr></thead>
           <tbody>{i.data.map(v => {
             const shortID = v.id.replace(/^sha256:/, "").slice(0, 12);
-            return <tr key={v.id}><td className="wide-code">{v.tags?.join(", ") || t("untagged")}
+            return <tr key={v.id}><td className="wide-code"><code>{v.tags?.join(", ") || t("untagged")}</code>
               <span className="entry-secondary mobile-meta"><code>{shortID}</code></span></td>
               <td className="on-wide"><code>{shortID}</code></td><td className="numeric whitespace-nowrap">{byteSize(v.size_bytes, locale)}</td></tr>;
-          })}</tbody></table>}
+          })}</tbody></table></div>}
   </section>;
 }

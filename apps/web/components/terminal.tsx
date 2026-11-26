@@ -2,6 +2,7 @@
 
 import { Translation, useT } from "@/components/i18n-provider";
 import { useEffect, useRef, useState } from "react";
+import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Status } from "./shared";
 import { wsPath } from "@/lib/api";
@@ -22,13 +23,16 @@ export function WorkspaceTerminal({id}: {id:string}) {
       Terminal.strings.promptLabel = t("terminalInput");
       Terminal.strings.tooMuchOutput = t("terminalTooMuchOutput");
       const terminal = new Terminal({cursorBlink:true, fontSize:13, scrollback:1800,
-        screenReaderMode: true, theme:{background:"#101013",foreground:"#f4f4f5",cursor:"#78adeb"}});
+        screenReaderMode: true, fontFamily:"\"JetBrains Mono Variable\", ui-monospace, SFMono-Regular, Menlo, monospace", theme:{background:"#141413",foreground:"#ecebe7",cursor:"#76a5f3",selectionBackground:"#2c3e63"}});
       const fit=new FitAddon();
       terminal.loadAddon(fit);
       terminal.open(target);
       terminal.attachCustomKeyEventHandler(e => {
         if(e.key==="Tab" && e.shiftKey) {
-          if (e.type === "keydown") document.getElementById("terminal-reconnect")?.focus();
+          if (e.type === "keydown") {
+            e.preventDefault();
+            document.getElementById("terminal-reconnect")?.focus();
+          }
           return false;
         }
         return true;
@@ -58,12 +62,13 @@ export function WorkspaceTerminal({id}: {id:string}) {
     return ()=>{disposed=true;cleanup();};
   },[id,attempt,t]);
 
-  return <section className="view-grid" aria-labelledby="terminal-title">
-    <div className="section-head mb-0"><div><h2 id="terminal-title">{t("developmentTerminal")}</h2>
-      <p><Translation id="terminalHint" values={{ path: <code>/workspace/project</code> }}/></p></div>
+  return <section className="terminal-frame" aria-labelledby="terminal-title">
+    <div className="terminal-bar">
+      <div className="min-w-0"><h2 id="terminal-title" className="text-[#ecebe7]">{t("developmentTerminal")}</h2>
+        <p><Translation id="terminalHint" values={{ path: <code>/workspace/project</code> }}/></p></div>
       <div className="actions"><Status state={status} label={status==="offline"?t("disconnected"):undefined}/>
-        <Button id="terminal-reconnect" variant="outline"
-          onClick={()=>{setStatus("connecting");setAttempt(n=>n+1);}}>{t("reconnect")}</Button></div>
+        <Button id="terminal-reconnect" variant="outline" size="sm" className="border-[#3b3b37] bg-transparent text-[#ecebe7] hover:bg-[#242422] hover:border-[#75746d]"
+          onClick={()=>{setStatus("connecting");setAttempt(n=>n+1);}}><RotateCw data-icon="inline-start"/>{t("reconnect")}</Button></div>
     </div>
     <div className="terminal-surface"><div ref={node}/></div>
   </section>;

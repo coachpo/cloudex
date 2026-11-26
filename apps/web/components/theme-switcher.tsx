@@ -24,11 +24,11 @@ export function ThemeSwitcher() {
 
   return <DropdownMenu modal={false}>
     <DropdownMenuTrigger asChild>
-      <Button ref={trigger} type="button" variant="ghost" size="sm" className="max-sm:min-h-11"
+      <Button ref={trigger} type="button" variant="ghost" size="sm" className="max-sm:h-11 max-sm:px-2.5"
         aria-label={t("themeSelection", { theme: selected })}>
-        <Icon data-icon="inline-start" strokeWidth={1.55} aria-hidden="true"/>
-        {selected}
-        <ChevronDown data-icon="inline-end" strokeWidth={1.55} aria-hidden="true"/>
+        <Icon data-icon="inline-start" strokeWidth={1.75} aria-hidden="true"/>
+        <span className="max-sm:sr-only">{selected}</span>
+        <ChevronDown data-icon="inline-end" strokeWidth={1.75} aria-hidden="true"/>
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="end" collisionPadding={8} onKeyDownCapture={event => {
@@ -41,7 +41,7 @@ export function ThemeSwitcher() {
       <DropdownMenuRadioGroup value={theme} onValueChange={value => selectTheme(parseTheme(value))}>
         {Object.entries(themes).map(([value, { label, icon: OptionIcon }]) =>
           <DropdownMenuRadioItem key={value} value={value}>
-            <OptionIcon strokeWidth={1.55} aria-hidden="true"/>{t(label)}
+            <OptionIcon strokeWidth={1.75} aria-hidden="true"/>{t(label)}
           </DropdownMenuRadioItem>)}
       </DropdownMenuRadioGroup>
     </DropdownMenuContent>

@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { useT } from "@/components/i18n-provider";
-import { Empty, Notice } from "@/components/shared";
+import { Loading, Notice } from "@/components/shared";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -31,17 +31,17 @@ export function WorkspaceRepositoryCredential({ id, busy }: { id: string; busy: 
   return <section className="panel" aria-labelledby="workspace-repository-credential">
     <div className="section-head"><h2 id="workspace-repository-credential">{t("repositoryCredential")}</h2></div>
     {query.error && <Notice error={query.error} retry={() => query.refetch()}/>}
-    {!status && !query.error && <Empty>{t("repositoryCredentialLoading")}</Empty>}
+    {!status && !query.error && <Loading label={t("repositoryCredentialLoading")} rows={2}/>}
     {status && <form className="form" onSubmit={event => {
       event.preventDefault();
       if (disabled) return;
       const fields = new FormData(event.currentTarget);
       write.mutate({ username: String(fields.get("username")), token: String(fields.get("token")) });
     }}>
-      <p className="small muted">
+      <p className="muted">
         {status.configured ? t("repositoryCredentialConfigured", { username: status.username }) : t("repositoryCredentialMissing")}
       </p>
-      <FieldGroup className="form">
+      <FieldGroup className="form-split">
         <Field className="fields" data-disabled={disabled}>
           <FieldLabel htmlFor="repo-credential-username">{t("repositoryUsername")}</FieldLabel>
           <input className="field" id="repo-credential-username" name="username" key={status.username} defaultValue={status.username}
@@ -58,7 +58,7 @@ export function WorkspaceRepositoryCredential({ id, busy }: { id: string; busy: 
       <p className="form-note">{t("repositoryCredentialRebuild")}</p>
       {write.error && <Notice error={write.error}/>}
       {write.data === false && <p className="notice" role="alert">{t("settingSaveUnconfirmed")}</p>}
-      {write.data && <p className="small muted" role="status">
+      {write.data && <p className="confirm" role="status">
         {t(write.variables === null ? "repositoryCredentialRemoved" : "repositoryCredentialSaved")}
       </p>}
       <div className="actions">
@@ -74,7 +74,7 @@ export function WorkspaceRepositoryCredential({ id, busy }: { id: string; busy: 
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel type="button">{t("cancel")}</AlertDialogCancel>
-              <AlertDialogAction type="button" variant="destructive" disabled={disabled} onClick={() => write.mutate(null)}>
+              <AlertDialogAction type="button" variant="danger" disabled={disabled} onClick={() => write.mutate(null)}>
                 {t("removeRepositoryCredential")}
               </AlertDialogAction>
             </AlertDialogFooter>

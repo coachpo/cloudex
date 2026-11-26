@@ -58,14 +58,14 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
     <AlertDialogContent>
       <AlertDialogHeader><AlertDialogTitle>{t("lifecycleConfirm", { action: t(labels[kind]), name: workspace.name })}</AlertDialogTitle>
         <AlertDialogDescription>{t(effects[kind])}</AlertDialogDescription></AlertDialogHeader>
-      {kind==="delete" && <label className="actions small"><input type="checkbox" checked={purge} onChange={e=>setPurge(e.target.checked)}/>
+      {kind==="delete" && <label className="label-inline rounded-md border border-border bg-[var(--sunken)] px-3 py-2"><input type="checkbox" checked={purge} onChange={e=>setPurge(e.target.checked)}/>
         {t("purgeWorkspace")}</label>}
       <AlertDialogFooter><AlertDialogCancel>{t("keepWorkspace")}</AlertDialogCancel>
-        <AlertDialogAction variant={destructive ? "destructive" : "default"} disabled={disabled || awaitingCredential(kind)} onClick={()=>queue(kind)}>{t(labels[kind])}</AlertDialogAction>
+        <AlertDialogAction variant={destructive ? "danger" : "default"} disabled={disabled || awaitingCredential(kind)} onClick={()=>queue(kind)}>{t(labels[kind])}</AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>;
-  return <div className="view-grid">
+  return <div className="grid gap-3">
     <div className="actions">
       {destructive ? <>{confirm("reset")}{confirm("delete")}</> : <>
         {(state==="running" || state==="paused") && confirm("stop")}
