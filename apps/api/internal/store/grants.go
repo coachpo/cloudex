@@ -199,6 +199,10 @@ func (s *Store) FailGrantRefresh(ctx context.Context, id string, epoch, version 
 
 func (s *Store) RecoverGrantRefreshes(ctx context.Context) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM gateway_history_references
+ WHERE grant_id IN (SELECT id FROM managed_grants WHERE refresh_attempt_id<>'')`); err != nil {
+			return err
+		}
 		if err := invalidateGatewayContext(ctx, tx, "grant_id IN (SELECT id FROM managed_grants WHERE refresh_attempt_id<>'')"); err != nil {
 			return err
 		}

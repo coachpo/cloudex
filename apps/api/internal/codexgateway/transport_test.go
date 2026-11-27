@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -837,6 +838,238 @@ func TestGatewayRebindFencesOldSocketToolResult(t *testing.T) {
 			if acceptedOnW1.Load() != 0 || acceptedOnW2.Load() != 1 {
 				t.Fatalf("actual continuation counts W1=%d W2=%d", acceptedOnW1.Load(), acceptedOnW2.Load())
 			}
+		})
+	}
+}
+
+func TestGatewayRebindRestoresCompletedToolHistory(t *testing.T) {
+	const (
+		callFields    = `"type":"custom_tool_call","call_id":"call_completed_on_a","name":"test","input":"tool input","status":"completed"`
+		call          = `{` + callFields + `}`
+		result        = `{"type":"custom_tool_call_output","call_id":"call_completed_on_a","output":[{"type":"input_text","text":"tool result"}]}`
+		reasoning     = `{"type":"reasoning","encrypted_content":"reasoning_from_a","summary":[]}`
+		provisional   = `{"type":"response.in_progress","response":{"id":"resp_fixture","output":[{"type":"reasoning","encrypted_content":"provisional_reasoning","summary":[]},{"type":"custom_tool_call","call_id":"call_completed_on_a","name":"test","input":"draft","status":"in_progress"}]}}`
+		pending       = `{"type":"function_call","call_id":"call_pending_on_a","name":"test","arguments":"{}"}`
+		pendingResult = `{"type":"function_call_output","call_id":"call_pending_on_a","output":"late result"}`
+		resultInput   = `[` + result + `]`
+		finishInput   = `[` + reasoning + `,` + call + `,` + result + `]`
+		pendingInput  = `[` + pending + `,` + pendingResult + `]`
+		invalidEnd    = `{"type":"response.completed","response":{}}`
+		resumeInput   = `[` + reasoning + `,` + call + `,` + result + `,{"type":"message","role":"user","content":"continue after rebinding"}]`
+		resumed       = `{"type":"response.completed","response":{"id":"resp_after_rebind"}}`
+	)
+	for _, mode := range []string{"sse", "websocket"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			var resumedOnA atomic.Int32
+			upstream := func(channel string) *httptest.Server {
+				t.Helper()
+				events := func(body []byte) []string {
+					var request struct{ Input json.RawMessage }
+					if err := json.Unmarshal(body, &request); err != nil {
+						t.Errorf("invalid upstream request: %v", err)
+						return nil
+					}
+					if channel == codexupstream.ChannelCodex {
+						switch string(request.Input) {
+						case transportInput:
+							return []string{
+								provisional,
+								`{"type":"response.output_item.done","item":` + reasoning + `}`,
+								`{"type":"response.output_item.done","item":{"id":"ctc_a","namespace":null,"metadata":{"source":"upstream"},"internal_chat_message_metadata_passthrough":{"content_token_count":10},"encrypted_content":"envelope_from_a",` + callFields + `}}`,
+								transportTerminal,
+							}
+						case finishInput, resultInput:
+							return []string{`{"type":"response.output_item.done","item":` + pending + `}`, `{"type":"response.completed","response":{"id":"resp_pending"}}`}
+						case pendingInput:
+							return []string{`{"type":"response.created","response":{"id":"resp_pending_result"}}`, invalidEnd}
+						case resumeInput:
+							resumedOnA.Add(1)
+							return []string{resumed}
+						}
+					}
+					t.Errorf("unexpected generation on %s: %s", channel, request.Input)
+					return nil
+				}
+				return transportCatalog(t, channel, func(w http.ResponseWriter, r *http.Request) {
+					if mode == "sse" {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						w.Header().Set("Content-Type", "text/event-stream")
+						for _, event := range events(body) {
+							_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+						}
+						return
+					}
+					conn, err := websocket.Accept(w, r, nil)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer conn.CloseNow()
+					for {
+						_, body, err := conn.Read(ctx)
+						if err != nil {
+							return
+						}
+						reply := events(body)
+						for _, event := range reply {
+							if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil {
+								t.Error(err)
+								return
+							}
+						}
+						if len(reply) > 0 && reply[len(reply)-1] == invalidEnd {
+							return
+						}
+					}
+				})
+			}
+			upstreamA, upstreamB := upstream(codexupstream.ChannelCodex), upstream(codexupstream.ChannelChatGPT)
+			adapterA := transportAdapter(t, codexupstream.ChannelCodex, upstreamA.URL, upstreamA.Client())
+			adapterB := transportAdapter(t, codexupstream.ChannelChatGPT, upstreamB.URL, upstreamB.Client())
+			f := newTransportFixture(t, adapterA, adapterB)
+			a, b := f.grant(adapterA), f.grant(adapterB)
+			w, firstTokenA := f.workspace("switching", a)
+			_, otherWorkspaceToken := f.workspace("separate", a)
+			instance, err := f.db.Container(ctx, w.ID, w.Generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint := f.server.URL + GatewayPath + "/responses"
+			open := func(token, thread, run, turn string) func(string, int, string) {
+				t.Helper()
+				headers := transportHeaders(token)
+				headers.Set(gatewayRunHeader, run)
+				headers.Set("Thread-Id", thread)
+				headers.Set(turnMetadataHeader, fmt.Sprintf(`{"thread_id":%q,"turn_id":%q}`, thread, turn))
+				if mode == "sse" {
+					return func(input string, wantStatus int, marker string) {
+						t.Helper()
+						request := fmt.Sprintf(`{"model":%q,"stream":true,"input":%s}`, transportModel, input)
+						req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(request))
+						if err != nil {
+							t.Fatal(err)
+						}
+						req.Header = headers
+						resp, err := f.server.Client().Do(req)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer resp.Body.Close()
+						body, err := io.ReadAll(resp.Body)
+						if err != nil || resp.StatusCode != wantStatus || !strings.Contains(string(body), marker) ||
+							(wantStatus == http.StatusOK && !strings.Contains(string(body), "response.completed")) {
+							t.Fatalf("SSE status=%d body=%s err=%v, want %d and %q", resp.StatusCode, body, err, wantStatus, marker)
+						}
+					}
+				}
+				conn, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: f.server.Client(), HTTPHeader: headers})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = conn.CloseNow() })
+				return func(input string, wantStatus int, marker string) {
+					t.Helper()
+					body := transportGenerate(input)
+					if input == resultInput && wantStatus == http.StatusOK {
+						body = append(body[:len(body)-1], `,"previous_response_id":"resp_fixture"}`...)
+					}
+					if err := conn.Write(ctx, websocket.MessageText, body); err != nil {
+						t.Fatal(err)
+					}
+					var received strings.Builder
+					for {
+						_, frame, err := conn.Read(ctx)
+						if err != nil {
+							t.Fatalf("read WebSocket after %s: %v", received.String(), err)
+						}
+						received.Write(frame)
+						var event struct {
+							Type   string
+							Status int
+						}
+						if err := json.Unmarshal(frame, &event); err != nil {
+							t.Fatal(err)
+						}
+						switch event.Type {
+						case "error":
+							if event.Status != wantStatus || !strings.Contains(string(frame), marker) {
+								t.Fatalf("WebSocket error %s, want %d and %q", frame, wantStatus, marker)
+							}
+							return
+						case "response.completed":
+							if wantStatus != http.StatusOK || !strings.Contains(received.String(), marker) {
+								t.Fatalf("WebSocket completed with %s, want %d and %q", received.String(), wantStatus, marker)
+							}
+							return
+						}
+					}
+				}
+			}
+			rebind := func(grant store.Grant, revision int64) string {
+				t.Helper()
+				binding, err := f.service.SetBinding(ctx, w.ID, grant.ID, revision)
+				if err != nil || binding.GrantID != grant.ID || binding.BindingRevision != revision+1 {
+					t.Fatalf("rebind: %+v %v", binding, err)
+				}
+				return f.install(w, instance.ID, grant)
+			}
+
+			const thread = "test-thread"
+			firstA := open(firstTokenA, thread, "original-run", "original-turn")
+			firstA(transportInput, http.StatusOK, "call_completed_on_a")
+			if mode == "websocket" {
+				firstA(resultInput, http.StatusOK, "call_pending_on_a")
+				firstA(pendingInput, http.StatusConflict, "submission_outcome_unknown")
+			} else {
+				firstA(finishInput, http.StatusOK, "call_pending_on_a")
+			}
+			tokenB := rebind(b, 1)
+			open(tokenB, thread, "b-run", "b-turn")(resumeInput, http.StatusConflict, "foreign_response_context")
+			tokenA := rebind(a, 2)
+			if mode == "websocket" {
+				stale, response, err := f.ws(ctx, firstTokenA)
+				if stale != nil {
+					_ = stale.CloseNow()
+				}
+				if err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
+					t.Fatalf("first A credential upgraded after rebinding: response=%v err=%v", response, err)
+				}
+			} else if response, body := f.sse(firstTokenA, resumeInput); response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("first A credential after rebinding: %d %s", response.StatusCode, body)
+			}
+			open(otherWorkspaceToken, thread, "other-run", "other-turn")(resumeInput, http.StatusConflict, "foreign_response_context")
+			open(tokenA, "other-thread", "resumed-run", "resumed-turn")(resumeInput, http.StatusConflict, "foreign_response_context")
+			for _, input := range []string{
+				resultInput,
+				pendingInput,
+				strings.Replace(resumeInput, "tool result", "altered result", 1),
+				strings.Replace(resumeInput, "tool input", "altered input", 1),
+				strings.Replace(resumeInput, `"name":"test"`, `"name":"different_tool"`, 1),
+				strings.Replace(resumeInput, "reasoning_from_a", "unknown_reasoning", 1),
+				strings.Replace(resumeInput, "reasoning_from_a", "provisional_reasoning", 1),
+				strings.Replace(resumeInput, call, `{"encrypted_content":"unverified_envelope",`+callFields+`}`, 1),
+			} {
+				open(tokenA, thread, "resumed-run", "resumed-turn")(input, http.StatusConflict, "foreign_response_context")
+			}
+			open(tokenA, thread, "resumed-run", "resumed-turn")(resumeInput, http.StatusOK, "resp_after_rebind")
+			if resumedOnA.Load() != 1 {
+				t.Fatalf("resumed generations on A = %d, want 1", resumedOnA.Load())
+			}
+			if err := f.db.ReplaceGrant(ctx, a, a.GrantEpoch); err != nil {
+				t.Fatal(err)
+			}
+			reauthorized, err := f.db.Grant(ctx, a.ID)
+			if err != nil || reauthorized.GrantEpoch != a.GrantEpoch+1 {
+				t.Fatalf("reauthorized grant epoch: %d, %v", reauthorized.GrantEpoch, err)
+			}
+			tokenNextEpoch := f.install(w, instance.ID, reauthorized)
+			open(tokenNextEpoch, thread, "reauthorized-run", "reauthorized-turn")(resumeInput, http.StatusConflict, "foreign_response_context")
 		})
 	}
 }

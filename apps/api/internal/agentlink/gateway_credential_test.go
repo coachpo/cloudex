@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -178,7 +179,11 @@ func verifyGatewayCredentialHostRoute(t *testing.T, engine runtime.Engine, netwo
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
-	target := runtime.Spec{WorkspaceID: store.ID(), Generation: 1, CreationOperationID: store.ID(), Image: store.DefaultWorkspaceImage, SSHNetwork: network, CPU: 500, Memory: 512}
+	image := os.Getenv("CLOUDEX_TEST_WORKSPACE_IMAGE")
+	if image == "" {
+		image = store.DefaultWorkspaceImage
+	}
+	target := runtime.Spec{WorkspaceID: store.ID(), Generation: 1, CreationOperationID: store.ID(), Image: image, SSHNetwork: network, CPU: 500, Memory: 512}
 	created, err := engine.Ensure(ctx, target)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +232,7 @@ func verifyGatewayCredentialHostRoute(t *testing.T, engine runtime.Engine, netwo
 	first := start()
 	awaitEmpty(first)
 	install := runtime.GatewayCredentialInstall{
-		Origin: "https://gateway.test", BindingRevision: 1, GrantEpoch: 1, Sequence: 1,
+		Origin: "https://gateway.test", BindingRevision: 1, GrantID: store.ID(), GrantEpoch: 1, Sequence: 1,
 		Token: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
 	}
 	verify := func(credential runtime.GatewayCredentialInstall) {
@@ -235,7 +240,7 @@ func verifyGatewayCredentialHostRoute(t *testing.T, engine runtime.Engine, netwo
 		digest := sha256.Sum256([]byte(credential.Token))
 		expected := runtime.GatewayCredentialConfirmation{
 			Digest: hex.EncodeToString(digest[:]), StartedAt: first.StartedAt, Origin: credential.Origin,
-			BindingRevision: credential.BindingRevision, GrantEpoch: credential.GrantEpoch, Sequence: credential.Sequence,
+			BindingRevision: credential.BindingRevision, GrantID: credential.GrantID, GrantEpoch: credential.GrantEpoch, Sequence: credential.Sequence,
 		}
 		confirm, err := inspector.InstallGatewayCredential(ctx, target, first, credential)
 		if err != nil || confirm != expected {
@@ -262,6 +267,49 @@ func verifyGatewayCredentialHostRoute(t *testing.T, engine runtime.Engine, netwo
 	if err != nil || exit != 0 || strings.TrimSpace(output.String()) != "0:10001:440\ncodex-cli "+codexupstream.CodexClientVersion {
 		t.Fatalf("credential mode or image entry point failed: exit=%d err=%v output=%q", exit, err, output.String())
 	}
+	checkCodexHome := func(credential runtime.GatewayCredentialInstall) {
+		t.Helper()
+		const launcher = `
+from pathlib import Path
+import runpy
+from unittest.mock import patch
+
+configure = runpy.run_path("/usr/local/bin/codex")["configure"]
+configure.__globals__["load_catalog"] = lambda *_: (b'{"models":[{"slug":"fixture"}]}', "fixture")
+with patch("os.execve") as execute:
+    configure([])
+if execute.call_count != 1:
+    raise RuntimeError("expected the launcher to start Codex exactly once")
+home = Path(execute.call_args.args[2]["CODEX_HOME"])
+print(home.relative_to(Path.home().resolve()))
+`
+		var stdout, stderr bytes.Buffer
+		exit, err := engine.Run(ctx, first.ContainerID, runtime.Exec{
+			Args: []string{"python3", "-c", launcher},
+			Dir:  "/workspace", Stdout: &stdout, Stderr: &stderr,
+		})
+		want := fmt.Sprintf(".codex/cloudex/%s-g%d", credential.GrantID, credential.GrantEpoch)
+		if got := strings.TrimSpace(stdout.String()); err != nil || exit != 0 || got != want {
+			t.Fatalf("CODEX_HOME for binding %d: got %q, want %q; exit=%d err=%v stderr=%q",
+				credential.BindingRevision, got, want, exit, err, stderr.String())
+		}
+	}
+	checkCodexHome(rotated)
+	current := rotated
+	for _, next := range []struct {
+		grantID         string
+		epoch, revision int64
+	}{
+		{store.ID(), 1, 2},
+		{install.GrantID, 1, 3},
+		{install.GrantID, 2, 3},
+	} {
+		current.GrantID, current.GrantEpoch, current.BindingRevision = next.grantID, next.epoch, next.revision
+		current.Sequence++
+		current.Token = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(current.Sequence)}, 32))
+		verify(current)
+		checkCodexHome(current)
+	}
 	if err := engine.Stop(ctx, first.ContainerID); err != nil {
 		t.Fatal(err)
 	}
@@ -273,5 +321,5 @@ func verifyGatewayCredentialHostRoute(t *testing.T, engine runtime.Engine, netwo
 		t.Fatalf("old startup retained credential confirmation: %v", err)
 	}
 	awaitEmpty(second)
-	t.Logf("Confirmed exact Docker instance, install replay and rotation, readable credential mode, image Codex %s, and tmpfs clearing after Stop / Start", codexupstream.CodexClientVersion)
+	t.Logf("Confirmed exact Docker instance, install replay and rotation, readable credential mode, image Codex %s, grant-specific homes, and tmpfs clearing after Stop / Start", codexupstream.CodexClientVersion)
 }

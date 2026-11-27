@@ -41,6 +41,10 @@ func GatewayCredentialScope(cred GatewayCredential) string {
 		cred.Generation, cred.StartedAt, cred.GrantID, cred.BindingRevision, cred.GrantEpoch))
 }
 
+func gatewayHistoryContainerScope(cred GatewayCredential) string {
+	return GatewayCredentialDigest(fmt.Sprintf("%q %q %d", cred.HostID, cred.DockerID, cred.Generation))
+}
+
 func validGatewayDigest(value string) bool {
 	bytes, err := hex.DecodeString(value)
 	return err == nil && len(bytes) == sha256.Size && value == strings.ToLower(value)
@@ -96,6 +100,10 @@ func (s *Store) IssueCredential(ctx context.Context, seed GatewayCredential) (Ga
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM gateway_submission_references WHERE workspace_id=? AND instance_scope<>?",
 			seed.WorkspaceID, GatewayCredentialScope(seed)); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM gateway_history_references WHERE workspace_id=? AND container_scope<>?",
+			seed.WorkspaceID, gatewayHistoryContainerScope(seed)); err != nil {
 			return err
 		}
 		seed.Status = CredentialPending
@@ -169,6 +177,9 @@ func (s *Store) RevokeWorkspaceCredential(ctx context.Context, workspaceID strin
 }
 
 func revokeGrantCredentials(ctx context.Context, tx *sql.Tx, grantID string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gateway_history_references WHERE grant_id=?", grantID); err != nil {
+		return err
+	}
 	return invalidateGatewayContext(ctx, tx, "grant_id=?", grantID)
 }
 

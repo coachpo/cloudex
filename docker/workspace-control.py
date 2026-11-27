@@ -53,7 +53,8 @@ def gateway_confirmation(marker, record):
     response = dict(boot_marker=marker)
     if record is not None:
         response.update(sequence=record["sequence"], started_at=record["started_at"],
-                        origin=record["origin"], binding_revision=record["binding_revision"], grant_epoch=record["grant_epoch"],
+                        origin=record["origin"], binding_revision=record["binding_revision"],
+                        grant_id=record["grant_id"], grant_epoch=record["grant_epoch"],
                         digest=hashlib.sha256(record["token"].encode("ascii")).hexdigest())
     print(json.dumps(response))
 
@@ -73,7 +74,9 @@ def gateway_install():
             raise ValueError()
         record = json.loads(data)
         marker = BOOT_MARKER_FILE.read_text()
-        if marker != record["boot_marker"] or not re.fullmatch(r"[A-Za-z0-9_-]{43}", record["token"]):
+        if (marker != record["boot_marker"]
+                or not re.fullmatch(r"[A-Za-z0-9_-]{43}", record["token"])
+                or not re.fullmatch(r"[0-9a-f]{32}", record["grant_id"])):
             raise ValueError()
         with (GATEWAY_DIR / "install.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)

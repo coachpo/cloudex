@@ -22,7 +22,7 @@
 
 ## Codex 授权和运行实例
 
-容器可在无推理绑定时用于 SSH、Git 和终端。对运行中的 Workspace 完成绑定或换绑后，控制面核验归属 Host 上的当前实例，签发并确认安装新的网关凭据。在 Host 离线或安装结果尚未核实时，绑定照常保存，推理显示待准备。工作镜像的启动器按绑定版本和授权代次载入模型目录与客户端会话空间。[绑定和续写契约](codex-gateway.md#换绑和上下文)
+容器可在无推理绑定时用于 SSH、Git 和终端。对运行中的 Workspace 完成绑定或换绑后，控制面核验归属 Host 上的当前实例，签发并确认安装新的网关凭据。在 Host 离线或安装结果尚未核实时，绑定照常保存，推理显示待准备。工作镜像的启动器载入当前授权的模型目录，并按授权 ID 和代次选择客户端会话空间。[绑定和续写契约](codex-gateway.md#换绑和上下文)
 
 Create、Start、Rebuild 或 Reset 成功后，新运行实例重新取得凭据。即使 Start 沿用同一个 Docker ID，也使用本次启动的凭据。Stop、Rebuild、Reset 与 Delete 被接受时即封禁旧凭据和流。失败后按实况重新核验并准备当前实例。控制面重启和 Host 恢复时，待确认的安装要与实际 Docker ID、本次启动及安装记录核对。Delete 删除 Workspace 的绑定。[存放与保留边界](adr/0006-dual-channel-codex-gateway.md)
 

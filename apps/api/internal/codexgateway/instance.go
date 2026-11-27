@@ -285,7 +285,7 @@ func (s *Service) ReconcileGateway(ctx context.Context, w store.Workspace, info 
 
 	confirmation, err = host.InstallGatewayCredential(ctx, spec, instance, runtime.GatewayCredentialInstall{
 		Token: token, Origin: s.origin,
-		BindingRevision: pending.BindingRevision, GrantEpoch: pending.GrantEpoch, Sequence: pending.Sequence,
+		BindingRevision: pending.BindingRevision, GrantID: pending.GrantID, GrantEpoch: pending.GrantEpoch, Sequence: pending.Sequence,
 	})
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func (s *Service) ReconcileGateway(ctx context.Context, w store.Workspace, info 
 
 func (s *Service) matchesConfirmation(cred store.GatewayCredential, confirmation runtime.GatewayCredentialConfirmation) bool {
 	return cred.Digest == confirmation.Digest && cred.Sequence == confirmation.Sequence && cred.StartedAt == confirmation.StartedAt &&
-		cred.BindingRevision == confirmation.BindingRevision && cred.GrantEpoch == confirmation.GrantEpoch &&
+		cred.BindingRevision == confirmation.BindingRevision && cred.GrantID == confirmation.GrantID && cred.GrantEpoch == confirmation.GrantEpoch &&
 		s.origin == confirmation.Origin
 }
 

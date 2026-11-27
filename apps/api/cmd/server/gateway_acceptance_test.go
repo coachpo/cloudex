@@ -366,7 +366,7 @@ func (c *acceptanceCredential) InstallGatewayCredential(_ context.Context, _ run
 	digest := sha256.Sum256([]byte(install.Token))
 	c.confirmation = runtime.GatewayCredentialConfirmation{
 		Digest: hex.EncodeToString(digest[:]), StartedAt: instance.StartedAt, Sequence: install.Sequence,
-		Origin: install.Origin, BindingRevision: install.BindingRevision, GrantEpoch: install.GrantEpoch,
+		Origin: install.Origin, BindingRevision: install.BindingRevision, GrantID: install.GrantID, GrantEpoch: install.GrantEpoch,
 	}
 	return c.confirmation, nil
 }

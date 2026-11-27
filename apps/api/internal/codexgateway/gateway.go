@@ -334,17 +334,16 @@ func (g *gatewayTransport) complete(ctx context.Context, scope requestScope, cur
 	} else if event.interrupted {
 		status = "interrupted"
 	}
-	if err := g.service.Store.RecordSubmissionReferences(ctx, scope.credential, scope.session(), event.references); err != nil {
-		return err
-	}
 	var response string
 	if event.id != "" {
 		response = gatewayDigest(event.id)
 	}
-	_, err := g.service.Store.CompareSubmission(ctx, scope.key(), current.Sequence, store.Submission{
+	return g.service.Store.CompleteSubmission(ctx, scope.key(), current.Sequence, store.Submission{
 		Status: status, Model: current.Model, ResponseID: response, CallIDs: event.calls,
+	}, store.SubmissionCompletion{
+		SessionDigest: scope.session(), References: event.references, ToolCalls: event.toolCalls,
+		ToolResults: event.toolResults, HistoryReferences: event.historyReferences,
 	})
-	return err
 }
 
 func (g *gatewayTransport) rememberTurnState(scope requestScope, value string) string {

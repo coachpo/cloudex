@@ -1,6 +1,7 @@
 package codexgateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"net/http"
@@ -17,8 +18,9 @@ type responsesPayload struct {
 	previous, response string
 	metadata           map[string]string
 	warmup             bool
-	references         []string
+	references         []store.SubmissionReference
 	toolResults        []string
+	submittedResults   []store.SubmittedToolResult
 }
 
 func parseResponses(data []byte, webSocket bool) (responsesPayload, error) {
@@ -74,18 +76,80 @@ func parseResponses(data []byte, webSocket bool) (responsesPayload, error) {
 		if json.Unmarshal(raw, &items) != nil {
 			return p, invalidRequest("input", "The Responses input is invalid.")
 		}
-		for _, item := range items {
-			call, refs := responsesReferences(item)
-			p.references = append(p.references, refs...)
-			if isToolResult(responseItemType(item)) {
-				if call == "" || slices.Contains(p.toolResults, call) {
-					return p, invalidRequest("input", "Each tool result must contain a unique call_id.")
-				}
-				p.toolResults = append(p.toolResults, call)
-			}
+		if err := p.readInputReferences(items); err != nil {
+			return p, err
 		}
 	}
 	return p, nil
+}
+
+func (p *responsesPayload) readInputReferences(items []json.RawMessage) error {
+	type inputCall struct {
+		reference   int
+		fingerprint string
+	}
+	calls := make(map[string]inputCall)
+	for _, item := range items {
+		kind := responseItemType(item)
+		call, refs := responsesReferences(item)
+		start := len(p.references)
+		for _, digest := range refs {
+			ref := store.SubmissionReference{Digest: digest}
+			if call == "" && kind != "item_reference" {
+				ref.HistoryDigest = digest
+			}
+			p.references = append(p.references, ref)
+		}
+		if isToolResult(kind) {
+			if call == "" || slices.Contains(p.toolResults, call) {
+				return invalidRequest("input", "Each tool result must contain a unique call_id.")
+			}
+			p.toolResults = append(p.toolResults, call)
+			original := calls[call]
+			result := toolFingerprint(item, call)
+			p.submittedResults = append(p.submittedResults, store.SubmittedToolResult{
+				CallID: call, CallFingerprint: original.fingerprint, Fingerprint: result,
+			})
+			// Restored history always provides the call before the result. A
+			// result by itself can only use a reference in the current binding.
+			// Only the call IDs inherit the pair proof. Opaque fields retain
+			// their own reference checks.
+			if original.fingerprint != "" && result != "" {
+				history := store.GatewayToolHistoryDigest(original.fingerprint, result)
+				p.references[original.reference].HistoryDigest = history
+				p.references[start].HistoryDigest = history
+			}
+		} else if call != "" {
+			calls[call] = inputCall{start, toolFingerprint(item, call)}
+		}
+	}
+	return nil
+}
+
+func toolFingerprint(item json.RawMessage, call string) string {
+	decoder := json.NewDecoder(bytes.NewReader(item))
+	decoder.UseNumber()
+	var fields map[string]any
+	if err := decoder.Decode(&fields); err != nil {
+		return ""
+	}
+	// Codex omits upstream metadata and tool encryption envelopes for custom
+	// providers. Call IDs and any submitted opaque references are checked separately.
+	delete(fields, "id")
+	delete(fields, "metadata")
+	delete(fields, "internal_chat_message_metadata_passthrough")
+	delete(fields, "encrypted_content")
+	delete(fields, "encrypted_function_args")
+	for key, value := range fields {
+		if value == nil {
+			delete(fields, key)
+		}
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return ""
+	}
+	return gatewayDigest("tool-item", call, string(encoded))
 }
 
 func responseItemType(item json.RawMessage) string {

@@ -330,7 +330,7 @@ func (s *upstreamSocket) generate(p responsesPayload) bool {
 		}
 		return s.writePeer(s.server, websocket.MessageText, body)
 	})
-	progress := responseProgress{requestID: s.requestID}
+	progress := responseProgress{requestID: s.requestID, toolResults: p.submittedResults}
 	outcome := "submission_outcome_unknown"
 	if current.Sequence != 0 {
 		defer func() { progress.audit(s.a, "websocket", redactUpstreamString(p.model, s.upstream.Token), outcome) }()
@@ -401,6 +401,10 @@ func (s *upstreamSocket) streamRound(scope requestScope, current store.Submissio
 
 func (s *upstreamSocket) forwardRoundEvent(event wsFrame, scope requestScope, current store.Submission, progress *responseProgress) error {
 	kind := progress.observe(event.body, "")
+	if kind == "response.completed" && !progress.terminal {
+		// Completion must supply its own valid response ID.
+		return nil
+	}
 	if kind == "response.metadata" {
 		data, err := s.gateway.responseMetadata(event.body, scope, s.upstream)
 		if err != nil {

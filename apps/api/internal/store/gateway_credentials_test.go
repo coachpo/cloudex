@@ -177,6 +177,7 @@ func TestSubmissionFenceAndReferencesSurviveStoreRestart(t *testing.T) {
 		t.Fatalf("changed model under submission scope: %v", err)
 	}
 	session, call := GatewayCredentialDigest("session"), GatewayCredentialDigest("call")
+	references := []SubmissionReference{{Digest: call}}
 	if err := db.RecordSubmissionReferences(ctx, active.Digest, session, []string{call, call}); err != nil {
 		t.Fatal(err)
 	}
@@ -201,11 +202,11 @@ func TestSubmissionFenceAndReferencesSurviveStoreRestart(t *testing.T) {
 	if _, err := db.CompareSubmission(ctx, key, 1, completed); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale update committed: %v", err)
 	}
-	if owned, err := db.SubmissionReferences(ctx, active.Digest, session, []string{call}); err != nil || !owned {
+	if owned, err := db.SubmissionReferences(ctx, active.Digest, session, references); err != nil || !owned {
 		t.Fatalf("matching session reference unknown: %v %v", owned, err)
 	}
 	for _, scope := range [][2]string{{other.Digest, session}, {active.Digest, GatewayCredentialDigest("other-session")}} {
-		if owned, err := db.SubmissionReferences(ctx, scope[0], scope[1], []string{call}); err != nil || owned {
+		if owned, err := db.SubmissionReferences(ctx, scope[0], scope[1], references); err != nil || owned {
 			t.Fatalf("different session accepted reference: %v %v", owned, err)
 		}
 	}
@@ -215,7 +216,7 @@ func TestSubmissionFenceAndReferencesSurviveStoreRestart(t *testing.T) {
 	if _, err := db.CompareSubmission(ctx, key, 2, completed); !errors.Is(err, ErrMissing) {
 		t.Fatalf("revoked credential updated submission: %v", err)
 	}
-	if _, err := db.SubmissionReferences(ctx, active.Digest, session, []string{call}); !errors.Is(err, ErrMissing) {
+	if _, err := db.SubmissionReferences(ctx, active.Digest, session, references); !errors.Is(err, ErrMissing) {
 		t.Fatalf("revoked credential read a reference: %v", err)
 	}
 	rotated := active
@@ -227,7 +228,7 @@ func TestSubmissionFenceAndReferencesSurviveStoreRestart(t *testing.T) {
 	if err := db.ActivateCredential(ctx, rotated); err != nil {
 		t.Fatal(err)
 	}
-	if owned, err := db.SubmissionReferences(ctx, rotated.Digest, session, []string{call}); err != nil || !owned {
+	if owned, err := db.SubmissionReferences(ctx, rotated.Digest, session, references); err != nil || !owned {
 		t.Fatalf("plain credential rotation lost same-instance reference: %v %v", owned, err)
 	}
 	restarted := rotated
@@ -239,7 +240,7 @@ func TestSubmissionFenceAndReferencesSurviveStoreRestart(t *testing.T) {
 	if err := db.ActivateCredential(ctx, restarted); err != nil {
 		t.Fatal(err)
 	}
-	if owned, err := db.SubmissionReferences(ctx, restarted.Digest, session, []string{call}); err != nil || owned {
+	if owned, err := db.SubmissionReferences(ctx, restarted.Digest, session, references); err != nil || owned {
 		t.Fatalf("new Docker startup accepted the prior instance's reference: %v %v", owned, err)
 	}
 }

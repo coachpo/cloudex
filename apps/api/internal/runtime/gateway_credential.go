@@ -33,6 +33,7 @@ type GatewayCredentialInstall struct {
 	Token           string `json:"token"`
 	Origin          string `json:"origin"`
 	BindingRevision int64  `json:"binding_revision"`
+	GrantID         string `json:"grant_id"`
 	GrantEpoch      int64  `json:"grant_epoch"`
 	Sequence        int64  `json:"sequence"`
 }
@@ -42,6 +43,7 @@ type GatewayCredentialConfirmation struct {
 	StartedAt       string `json:"started_at"`
 	Origin          string `json:"origin"`
 	BindingRevision int64  `json:"binding_revision"`
+	GrantID         string `json:"grant_id"`
 	GrantEpoch      int64  `json:"grant_epoch"`
 	Sequence        int64  `json:"sequence"`
 }
@@ -121,7 +123,7 @@ func (d *Docker) InstallGatewayCredential(ctx context.Context, spec Spec, instan
 	hexDigest := sha256.Sum256([]byte(install.Token))
 	confirmation = GatewayCredentialConfirmation{
 		Digest: hex.EncodeToString(hexDigest[:]), StartedAt: instance.StartedAt, Origin: install.Origin,
-		BindingRevision: install.BindingRevision, GrantEpoch: install.GrantEpoch, Sequence: install.Sequence,
+		BindingRevision: install.BindingRevision, GrantID: install.GrantID, GrantEpoch: install.GrantEpoch, Sequence: install.Sequence,
 	}
 	if state.Sequence == install.Sequence && state.GatewayCredentialConfirmation == confirmation {
 		return confirmation, nil // An earlier acknowledgement may have been lost.

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/coachpo/cloudex/apps/api/internal/codexupstream"
+	"github.com/coachpo/cloudex/apps/api/internal/store"
 )
 
 type responseProgress struct {
@@ -15,6 +16,9 @@ type responseProgress struct {
 	terminal            bool
 	interrupted         bool
 	calls, references   []string
+	historyReferences   []string
+	toolCalls           map[string]string
+	toolResults         []store.SubmittedToolResult
 	usage               *responseUsage
 }
 
@@ -49,12 +53,15 @@ func (p *responseProgress) observe(data []byte, name string) string {
 	if event.Type == "" {
 		event.Type = name
 	}
+	if event.Type == "response.completed" && (event.Response == nil || !validGatewayID(event.Response.ID)) {
+		return event.Type
+	}
 	if event.Response != nil {
 		if validGatewayID(event.Response.ID) {
 			p.id = event.Response.ID
 		}
 		for _, item := range event.Response.Output {
-			p.observeItem(item)
+			p.observeItem(item, event.Type == "response.completed")
 		}
 		if event.Response.Usage != nil {
 			p.usage = event.Response.Usage
@@ -62,7 +69,7 @@ func (p *responseProgress) observe(data []byte, name string) string {
 		p.interrupted = event.Type == "response.incomplete" && event.Response.IncompleteDetails.Reason == "interrupted"
 	}
 	if event.Type == "response.output_item.done" {
-		p.observeItem(event.Item)
+		p.observeItem(event.Item, true)
 	}
 	switch event.Type {
 	case "response.completed", "response.failed", "response.incomplete", "response.cancelled", "error":
@@ -72,17 +79,32 @@ func (p *responseProgress) observe(data []byte, name string) string {
 	return event.Type
 }
 
-func (p *responseProgress) observeItem(item json.RawMessage) {
+func (p *responseProgress) observeItem(item json.RawMessage, finalized bool) {
 	call, references := responsesReferences(item)
 	p.references = append(p.references, references...)
+	kind := responseItemType(item)
+	if finalized && call == "" && kind != "item_reference" {
+		p.historyReferences = append(p.historyReferences, references...)
+	}
 	var fields struct {
 		ID string `json:"id"`
 	}
 	if json.Unmarshal(item, &fields) == nil && validGatewayID(fields.ID) {
 		p.references = append(p.references, gatewayDigest("item", fields.ID))
 	}
-	if call != "" && !isToolResult(responseItemType(item)) && !slices.Contains(p.calls, call) {
+	if call == "" || isToolResult(kind) {
+		return
+	}
+	if !slices.Contains(p.calls, call) {
 		p.calls = append(p.calls, call)
+	}
+	// Intermediate snapshots can contain incomplete arguments and ciphertext.
+	// Use the first finalized call, which Codex normally receives as item.done.
+	if finalized && p.toolCalls[call] == "" {
+		if p.toolCalls == nil {
+			p.toolCalls = make(map[string]string)
+		}
+		p.toolCalls[call] = toolFingerprint(item, call)
 	}
 }
 

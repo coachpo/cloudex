@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Codex with this Workspace's gateway and a binding-specific home."""
+"""Launch Codex with this Workspace's gateway and a grant-specific home."""
 
 import hashlib
 import json
@@ -95,7 +95,7 @@ def configure(args):
         base = credential["origin"].rstrip("/") + "/g/v1"
         token = credential["token"]
         catalog, model = load_catalog(base, token)
-        namespace = f"b{credential['binding_revision']:d}-g{credential['grant_epoch']:d}"
+        namespace = f"{credential['grant_id']}-g{credential['grant_epoch']:d}"
         note = "Check the Workspace's Cloudex authorization binding."
     except GatewayUnavailable as error:
         if not args or args[0] != "app-server":

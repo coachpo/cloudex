@@ -81,3 +81,10 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 真实上游验收需要获授权的本人账号、应用注册和确切操作范围。每个渠道分别验证回调身份、scope、模型目录、同一模型 WS 和 SSE 两格的两次工具往返、终态，以及一次实际刷新。要求专属路由的 Codex workspace 分别验证目录与 Responses 的最终路由。记录上游请求 ID；服务端未回显 workspace 时标为未知。故障和竞态由受控上游提供确定性证据。OpenAI 对部署形态的正式支持独立于以上结果。[公开支持边界](codex-gateway.md#上游公开支持边界)
 
 2026-11-27，合成版 `8427356` 在独立 Colima Docker 环境中使用 `codex-cli 0.172.0` 和 `gpt-6.2-sol` 完成真实账号验收。Sign in with Codex 和 Sign in with ChatGPT 分别通过 WebSocket 和强制 HTTP/SSE 完成两次有依赖的工具往返，四格均收到 `response.completed`。撤销测试中，两渠道上游均确认撤权，原实例凭据随后被网关拒绝。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。
+
+2026-11-27，提交 `af4d97e` 在隔离的本地 Colima Docker 中以 `codex-cli 0.172.0` 和 `gpt-6.2-sol` 完成真实上游换绑复验。两轮在同一个 Workspace 容器内各执行一次 A → B → A。每轮切回 A 后，使用新凭据恢复本轮原会话，模型准确复述了仅出现在先前工具结果中的随机 UUID，新增工具调用为 0。切回后以本轮首次绑定 A 时签发的旧网关凭据请求 `/g/v1/models`，两轮均返回 `401 invalid_gateway_credential`。
+
+| 传输 | 绑定版本 | 终态与回退观测 |
+|---|---|---|
+| WebSocket | `1 → 2 → 3` | 3 次握手均返回 `101`，4 个 `response.completed` 经 WebSocket 送达，观测到 0 次 SSE `POST /g/v1/responses`，全程无 SSE 回退。 |
+| SSE | `3 → 4 → 5` | 4 个 `response.completed` 经 SSE 送达。 |

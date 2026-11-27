@@ -107,7 +107,7 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 	if errors.Is(err, errTokenMoved) {
 		return false
 	}
-	progress := responseProgress{}
+	progress := responseProgress{toolResults: p.submittedResults}
 	outcome := "submission_outcome_unknown"
 	if current.Sequence != 0 {
 		defer func() { progress.audit(a, "sse", redactUpstreamString(p.model, upstream.Token), outcome) }()

@@ -33,7 +33,7 @@ func (h *grantTestHost) InspectGatewayCredential(_ context.Context, _ runtime.Sp
 	}
 	return runtime.GatewayCredentialConfirmation{
 		StartedAt: instance.StartedAt, Digest: store.GatewayCredentialDigest(h.active.Token), Sequence: h.active.Sequence,
-		Origin: h.active.Origin, BindingRevision: h.active.BindingRevision, GrantEpoch: h.active.GrantEpoch,
+		Origin: h.active.Origin, BindingRevision: h.active.BindingRevision, GrantID: h.active.GrantID, GrantEpoch: h.active.GrantEpoch,
 	}, nil
 }
 
@@ -280,6 +280,9 @@ func TestGatewayInstallationRecoveryAndOriginChange(t *testing.T) {
 	host.loseAck = true
 	if err := s.ReconcileGateway(ctx, w, info, host); !errors.Is(err, runtime.ErrHostUnavailable) {
 		t.Fatalf("expected lost installation acknowledgement, got %v", err)
+	}
+	if host.active.GrantID != a.ID {
+		t.Fatalf("installed grant ID = %q, want %q", host.active.GrantID, a.ID)
 	}
 	oldToken := host.active.Token
 	if _, err := s.Admit(ctx, oldToken); err == nil {
