@@ -35,9 +35,9 @@ Cloudex 由同一个 Go 控制面持有上游授权，并向工作容器提供 R
 
 网关对每条下游 Responses WS 建立对应的上游连接。WS 只在发出它的有效连接内接收 `previous_response_id`，工具结果按 `call_id` 及逻辑会话核对。HTTP/SSE 续轮用输入历史交回工具结果。在新绑定、授权代次或其他 Workspace 中引用旧工具结果会在转发前遭拒。客户端中断停止其转发，对上游已接受的工作需要以实际中断确认或结果未知表示。
 
-生成尚未提交且上游明确拒绝 Upgrade 时，网关返回 `426`，由固定版客户端以同一授权与同一模型回退 HTTP/SSE。已写出生成，或因断线、进程退出而无法确定是否写出时，网关记录该次提交，防止客户端自动改用另一传输重复发出请求。客户端明确引用上一轮交付的响应或工具调用才能推进相关续写。
+生成尚未提交时，上游明确拒绝 Upgrade、返回无效升级响应，或 ChatGPT 握手返回 `403 subscription_sharing_route_not_supported`，网关会用 `426` 让固定版客户端以同一授权和同一模型回退 HTTP/SSE。其他权限失败和限流保留上游语义。已写出生成，或因断线、进程退出而无法确定是否写出时，网关记录该次提交，防止客户端自动改用另一传输重复发出请求。客户端明确引用上一轮交付的响应或工具调用才能推进相关续写。
 
-上游成功响应缺少 `Content-Type` 时，网关先在有限字节和时限内确认首个 Responses SSE 事件，再以 `text/event-stream` 向客户端返回已读取的前缀和后续事件。无法确认流格式时保留提交结果未知的状态。HTTP 和流内错误保留上游错误种类、适用字段和重试信息。只有 `response.completed` 表示完成。流内失败、未完成、中断或提前断流分别保留实际状态，缺少上游 usage 时将用量视为未知。[固定版 Codex 回退逻辑](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core/src/responses_retry.rs) · [上游错误与恢复](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
+上游成功响应缺少 `Content-Type` 时，网关先在有限字节和时限内确认首个 Responses SSE 事件，支持 LF、CRLF、CR 换行和流首的 UTF-8 BOM，再以 `text/event-stream` 向客户端转发事件。仅用 SSE 事件名标识的 Responses 事件会补齐客户端所需的 JSON `type`。无法确认流格式时保留提交结果未知的状态。HTTP 和流内错误保留上游错误种类、适用字段和重试信息。只有 `response.completed` 表示完成。流内失败、未完成、中断或提前断流分别保留实际状态，缺少上游 usage 时将用量视为未知。[固定版 Codex 回退逻辑](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core/src/responses_retry.rs) · [上游错误与恢复](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
 
 ## 上游公开支持边界
 

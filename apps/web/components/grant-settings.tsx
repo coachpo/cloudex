@@ -41,6 +41,10 @@ function WorkspaceLinks({ ids, names }: { ids: string[]; names: Map<string, stri
 type GrantAction = { grant: ManagedGrant; kind: "disconnect" | "delete" };
 type StartAuthorization = { channel: GrantChannel; grant_id?: string; method?: "device_code" };
 
+function isMissingAttempt(error: unknown) {
+  return error instanceof APIError && error.status === 404;
+}
+
 export function GrantSettings() {
   const { t } = useT();
   const client = useQueryClient();
@@ -69,14 +73,17 @@ export function GrantSettings() {
     queryFn: ({ signal }) => api<GrantAttempt>(grantAttemptPath(attemptID), { signal }),
     enabled: !!attemptID,
     gcTime: 0,
-    retry: (retries, error) => !(error instanceof APIError && error.status === 404) && retries < 2,
+    retry: (retries, error) => !isMissingAttempt(error) && retries < 2,
     refetchInterval: ({ state: { data, error } }) =>
-      (!data || data.status === "pending") && !(error instanceof APIError && error.status === 404) ? 1500 : false,
+      (!data || data.status === "pending") && !isMissingAttempt(error) ? 1500 : false,
     refetchIntervalInBackground: true,
   });
   const confirm = useMutation({
     gcTime: 0,
     mutationFn: (id: string) => change<ManagedGrant>(grantAttemptPath(id) + "/confirm", "POST"),
+    onError: error => {
+      if (!isMissingAttempt(error)) void attempt.refetch();
+    },
     onSuccess: () => {
       start.reset();
       return refreshViews();
@@ -87,7 +94,7 @@ export function GrantSettings() {
       try {
         await change<void>(grantAttemptPath(id), "DELETE");
       } catch (error) {
-        if (!(error instanceof APIError && error.status === 404)) throw error;
+        if (!isMissingAttempt(error)) throw error;
       }
     },
     onSuccess: closeAttempt,
@@ -101,7 +108,10 @@ export function GrantSettings() {
   const busy = start.isPending || confirm.isPending || cancelDevice.isPending || action.isPending || callbackSubmitting;
   const conflict = action.error instanceof APIError && action.error.status === 409
     ? (action.error.details as { workspace_ids?: string[] } | undefined)?.workspace_ids : undefined;
-  const attemptMissing = [attempt.error, confirm.error].some(error => error instanceof APIError && error.status === 404);
+  const confirmMissing = isMissingAttempt(confirm.error);
+  const confirmError = confirmMissing ? null : confirm.error;
+  const checkingConfirmation = !!confirmError && attempt.fetchStatus !== "idle";
+  const attemptMissing = isMissingAttempt(attempt.error) || confirmMissing;
   const attemptResult = attemptMissing ? undefined : attempt.data;
   const attemptState = attemptResult?.status;
   const showProvider = !attemptMissing && attemptState !== "failed" && attemptState !== "ready";
@@ -158,7 +168,7 @@ export function GrantSettings() {
     {action.error && <Notice error={action.error}/>}
     {!!conflict?.length && <WorkspaceLinks ids={conflict} names={workspaceNames}/>}
     {start.error && <Notice error={start.error}/>}
-    {confirm.error && !attemptMissing && <Notice error={confirm.error}/>}
+    {confirmError && <Notice error={confirmError}/>}
     {action.isSuccess && <p className="confirm" role="status">{t(action.variables.kind === "disconnect" ? "grantDisconnectDone" : "grantDeleteDone")}</p>}
     {confirm.isSuccess && <p className="confirm" role="status">{t("grantConfirmDone")}</p>}
     {grants.isPending && <Loading label={t("loading")}/>}
@@ -199,7 +209,7 @@ export function GrantSettings() {
     </div>}
     {started ? <div className="form subtle-panel">
       <h3 ref={attemptHeading} tabIndex={-1}>{t(attemptState === "ready" ? "grantConfirmTitle" : device ? "grantDeviceCodeTitle" : "grantAuthorizationTitle")}</h3>
-      {attemptMissing && <p role="alert" className="form-note">{t(device ? "grantDeviceCodeExpired" : "grantCallbackAttemptUnavailable")}</p>}
+      {attemptMissing && !confirmError && <p role="alert" className="form-note">{t(device ? "grantDeviceCodeExpired" : "grantCallbackAttemptUnavailable")}</p>}
       {attempt.error && !attemptMissing && <Notice error={attempt.error} retry={() => attempt.refetch()}/>}
       {cancelDevice.error && <Notice error={cancelDevice.error}/>}
       {attemptResult?.status === "failed" && <p role="alert" className="form-note">{grantProblem(t, attemptResult.code ?? "", attemptResult.error || t("grantAuthorizationFailed"))}</p>}
@@ -216,7 +226,7 @@ export function GrantSettings() {
         </>}
       <div className="actions">
         {attemptState === "ready" ? <Button type="button" onClick={() => confirm.mutate(started.id)}
-          disabled={busy || attempt.isError}>{t("grantConfirm")}</Button> :
+          disabled={busy || attempt.isError || checkingConfirmation}>{t("grantConfirm")}</Button> :
           showProvider && <Button asChild><a href={device ? device.verification_url : started.authorization_url}
             aria-describedby={device ? "grant-device-code-instructions" : undefined} target="_blank" rel="noopener noreferrer">
             {t(device ? "grantOpenDeviceVerification" : "grantOpenSignIn")} <ArrowUpRight data-icon="inline-end"/>

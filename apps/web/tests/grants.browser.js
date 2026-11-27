@@ -38,8 +38,11 @@ async page => {
   let binding = { workspace_id: w1.id, grant_id: a.id, binding_revision: 8, readiness: "ready" };
   let started, attemptNumber = 0, callbackReturned = false, confirmed = 0, revoked = 0, rotated = 0, removed = 0;
   let deviceConfirmed = 0, deviceCancelled = 0;
-  let expireOnConfirm = false, confirmationExpired = false;
+  let expireOnConfirm = false, conflictOnConfirm = false, confirmationUnavailable = false;
   const expiringIdentityName = "Identity awaiting an expired save";
+  const duplicateGrantError = "This identity already has a grant for this registration and workspace.";
+  let releaseConflictRead;
+  const conflictReadReleased = new Promise(resolve => { releaseConflictRead = resolve; });
   let manualResult;
   const manualConfirmed = [];
   const manualURLs = {
@@ -76,7 +79,7 @@ async page => {
     if (path === "/grant-authorizations" && request.method() === "POST") {
       started = request.postDataJSON();
       callbackReturned = false;
-      confirmationExpired = false;
+      confirmationUnavailable = false;
       manualResult = undefined;
       const id = "attempt-" + ++attemptNumber;
       return ok(route, started.method === "device_code"
@@ -87,7 +90,10 @@ async page => {
       const id = "attempt-" + attemptNumber;
       const cancelDevice = request.method() === "DELETE" && started.method === "device_code";
       if (cancelDevice) deviceCancelled++;
-      if (confirmationExpired) return fail(route, 404, "NOT_FOUND", "The requested resource was not found.");
+      if (confirmationUnavailable) {
+        const missing = () => fail(route, 404, "NOT_FOUND", "The requested resource was not found.");
+        return conflictOnConfirm ? conflictReadReleased.then(missing) : missing();
+      }
       if (cancelDevice) return route.fulfill({ status: 204 });
       if (manualResult) return ok(route, { id, status: "ready", identity: manualResult });
       if (!callbackReturned) return ok(route, { id, status: "pending" });
@@ -103,8 +109,9 @@ async page => {
       manualResult = started.channel === "codex" ? manualCodexGrant : b;
       return route.fulfill({ status: 204 });
     }
-    if (expireOnConfirm && path === "/grant-authorizations/attempt-" + attemptNumber + "/confirm" && request.method() === "POST") {
-      confirmationExpired = true;
+    if ((expireOnConfirm || conflictOnConfirm) && path === "/grant-authorizations/attempt-" + attemptNumber + "/confirm" && request.method() === "POST") {
+      confirmationUnavailable = true;
+      if (conflictOnConfirm) return fail(route, 409, "grant_exists", duplicateGrantError);
       return fail(route, 404, "NOT_FOUND", "The requested resource was not found.");
     }
     if (path === "/grant-authorizations/attempt-1/confirm" && request.method() === "POST") {
@@ -177,7 +184,10 @@ async page => {
       await login.getByText("Local OAuth fixture", { exact: true }).waitFor();
       await login.close();
     }
-    await settings.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+    const chatGPTSignIn = settings.getByRole("button", { name: "Sign in with ChatGPT", exact: true });
+    const loopbackInstructions = settings.getByText(/connect that browser’s loopback port/);
+    await chatGPTSignIn.click();
+    await loopbackInstructions.waitFor();
     await completeFakeSignIn();
     await settings.getByRole("heading", { name: "Confirm the signed-in account", exact: true }).waitFor();
     await settings.getByText(b.client_id, { exact: true }).waitFor();
@@ -202,7 +212,7 @@ async page => {
     expect(await verificationLink.getAttribute("href") === verification, "Device sign-in did not open the upstream verification page");
     const code = settings.getByText(userCode, { exact: true });
     await code.waitFor();
-    expect(await settings.getByText(/loopback callback/).count() === 0, "Device sign-in showed loopback instructions");
+    expect(await loopbackInstructions.count() === 0, "Device sign-in showed loopback instructions");
     await page.setViewportSize({ width: 320, height: 720 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= 320), "The device prompt overflowed a narrow viewport");
     await page.setViewportSize({ width: 1100, height: 720 });
@@ -283,13 +293,32 @@ async page => {
       await expiringIdentity.waitFor();
       await saveAuthorization.click();
       await settings.getByRole("alert").filter({ hasText: hint }).waitFor();
-      expect(confirmationExpired && await saveAuthorization.count() === 0 && await expiringIdentity.count() === 0 &&
+      expect(confirmationUnavailable && await saveAuthorization.count() === 0 && await expiringIdentity.count() === 0 &&
         await settings.getByRole("heading", { name: "Confirm the signed-in account", exact: true }).count() === 0,
         "Confirmation still showed a stale account or Save action after the attempt expired");
       await settings.getByRole("button", { name: "Cancel", exact: true }).click();
       await codexSignIn.waitFor();
     }
     expect(deviceCancelled === 1, "Closing an expired device attempt sent an additional cancellation");
+
+    expireOnConfirm = false;
+    conflictOnConfirm = true;
+    await chatGPTSignIn.click();
+    await completeFakeSignIn();
+    await saveAuthorization.waitFor();
+    const statusURL = `${base}/grant-authorizations/attempt-${attemptNumber}`;
+    const statusRead = page.waitForRequest(request => request.method() === "GET" && request.url() === statusURL);
+    await saveAuthorization.click();
+    await statusRead;
+    const conflictAlert = settings.getByRole("alert").filter({ hasText: duplicateGrantError });
+    const cancelConflict = settings.getByRole("button", { name: "Cancel", exact: true });
+    await conflictAlert.waitFor();
+    expect(await cancelConflict.isEnabled() && await saveAuthorization.isDisabled(),
+      "Checking the failed confirmation did not allow cancel while blocking a second save");
+    releaseConflictRead();
+    await saveAuthorization.waitFor({ state: "hidden" });
+    await conflictAlert.waitFor();
+    await cancelConflict.click();
 
     await Promise.all([
       page.waitForURL(origin + "/workspaces/w1/settings#workspace-grant"),
@@ -344,6 +373,7 @@ async page => {
     expect(removed === 1 && grants[0] === a, "Deleting the unbound grant also affected the other channel");
     return { confirmed, deviceConfirmed, deviceCancelled, manualConfirmed, requestedRevisions, rotated, revoked, removed };
   } finally {
+    releaseConflictRead();
     await context.unroute(pattern);
     await context.unroute(provider);
     await context.unroute(verification);

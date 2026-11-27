@@ -15,13 +15,14 @@ CLOUDEX_TEST_CODEX_BIN=/absolute/path/to/codex go test -count=1 -v ./cmd/server 
 | 渠道与传输 | 检查请求 | 完成判据 |
 |---|---|---|
 | Codex × WS | `/backend-api/codex/responses`，Codex 测试身份及其账号头与 beta 标识。专属路由单独检查目标 origin。 | 同一连接上两次配对的工具往返，最终 `response.completed`。 |
-| Codex × SSE | 同路径同身份的 POST，完整工具历史。分别检查明确 `426` 前回退和直接 HTTP。 | 同一模型两次配对的工具往返，最终 `response.completed`。 |
+| Codex × SSE | 同路径同身份的 POST，完整工具历史。分别检查生成前拒绝 Upgrade 后回退和直接 HTTP。 | 同一模型两次配对的工具往返，最终 `response.completed`。 |
 | ChatGPT × WS | `/v1/responses`，ChatGPT issued 注册的合成身份，连接内续写，公开 WS 请求形状。 | 同一连接上两次配对的工具往返，最终 `response.completed`。 |
 | ChatGPT × SSE | `/v1/responses`，同一 issued 注册，`store:false`、`stream:true`、完整历史、无 `previous_response_id`。 | 同一模型两次配对的工具往返，最终 `response.completed`。 |
 
 | 故障注入或状态变更 | 需要观察的结果 |
 |---|---|
-| 生成前拒绝 Upgrade | 假上游先收到握手和明确 `426`，再收到同一授权同一模型的 SSE。WS 未收到生成。 |
+| 生成前拒绝 Upgrade | 假上游只收到一次握手，返回 `426` 或 ChatGPT 专用的 `403 subscription_sharing_route_not_supported` 后，收到同一授权同一模型的 SSE。WS 未收到生成。 |
+| SSE 上游省略媒体类型 | 省略 `Content-Type` 的 CR 和 BOM 流以 `text/event-stream` 转发。固定客户端核对同一身份下的两次工具往返和终态。 |
 | 生成已送达后断流、丢失终态和控制面退出 | 原运行的自动重连或 SSE 重试遭拒。假上游看到的生成次数仍为一次。 |
 | W1/W2 共享 A，另加 B | W1/W2 并发只兑换一次 A，B 独立可用，添加 B 不影响原绑定或流。 |
 | 刷新落库前退出；重授权后旧刷新回包 | 未确认的兑换阻止再次使用旧 refresh token，迟到结果不能修改新授权。已明确临时失败与明确永久失效分别校验。 |

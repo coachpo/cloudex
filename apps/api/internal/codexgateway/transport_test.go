@@ -956,9 +956,71 @@ func TestGatewayWebSocketContinuationStaysInItsThread(t *testing.T) {
 	}
 }
 
+func TestGatewayUpgradeRefusalClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		channel    string
+		upstream   int
+		code       string
+		downstream int
+		streaming  bool
+	}{
+		{"method-not-upgradable", "chatgpt", http.StatusMethodNotAllowed, "", http.StatusUpgradeRequired, false},
+		{"success-without-upgrade", "chatgpt", http.StatusOK, "", http.StatusUpgradeRequired, true},
+		{"invalid-upgrade", "chatgpt", http.StatusSwitchingProtocols, "", http.StatusUpgradeRequired, false},
+		{"wrong-endpoint", "chatgpt", http.StatusNotFound, "", http.StatusNotFound, false},
+		{"permission-denied", "chatgpt", http.StatusForbidden, "chatpass_v2_scope_not_authorized", http.StatusForbidden, false},
+		{"limit", "chatgpt", http.StatusTooManyRequests, "subscription_sharing_usage_limit_exceeded", http.StatusTooManyRequests, false},
+		{"chatgpt-route-not-supported", "chatgpt", http.StatusForbidden, "subscription_sharing_route_not_supported", http.StatusUpgradeRequired, false},
+		{"codex-route-not-supported", "codex", http.StatusForbidden, "subscription_sharing_route_not_supported", http.StatusForbidden, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			upstream := transportCatalog(t, tc.channel, func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Method != http.MethodGet || r.Header.Get("Upgrade") != "websocket" ||
+					r.Header.Get("Authorization") != "Bearer access-"+tc.channel {
+					t.Error("upstream did not receive the bound identity's upgrade request")
+				}
+				w.WriteHeader(tc.upstream)
+				if tc.code != "" {
+					_, _ = fmt.Fprintf(w, "{\"error\":{\"code\":%q}}", tc.code)
+				}
+				if tc.streaming {
+					if err := http.NewResponseController(w).Flush(); err != nil {
+						t.Error(err)
+					}
+					<-r.Context().Done()
+				}
+			})
+			adapter := transportAdapter(t, tc.channel, upstream.URL, upstream.Client())
+			f := newTransportFixture(t, adapter)
+			_, token := f.workspace(tc.name, f.grant(adapter))
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			conn, res, err := f.ws(ctx, token)
+			if conn != nil {
+				conn.CloseNow()
+			}
+			if res != nil {
+				defer res.Body.Close()
+			}
+			if err == nil || res == nil || res.StatusCode != tc.downstream || requests.Load() != 1 {
+				t.Fatalf("upgrade result: response=%v err=%v upstream requests=%d", res, err, requests.Load())
+			}
+			if tc.code != "" && tc.downstream != http.StatusUpgradeRequired {
+				body, err := io.ReadAll(res.Body)
+				if err != nil || !strings.Contains(string(body), tc.code) {
+					t.Fatalf("upstream refusal was not preserved: %s (%v)", body, err)
+				}
+			}
+		})
+	}
+}
+
 func TestGatewaySSEWithoutContentTypeRequiresResponsesFraming(t *testing.T) {
 	responses := ": keep-alive\r\n\r\n" +
-		"event: response.created\r\ndata: {\"response\":{\"id\":\"resp_fixture\"}}\r\n\r\n" +
+		"event: response.created\r\nid: initial\r\nretry: 1000\r\ndata: {\"response\":{\"id\":\"resp_fixture\"}}\r\n\r\n" +
 		"event: response.completed\r\ndata: " + transportTerminal + "\r\n\r\n"
 	message := "event: message\ndata: " + transportTerminal + "\n\n"
 	credential := ": access-chatgpt\nid: access-chatgpt\n\ndata: " + transportTerminal + "\n\n"
@@ -974,6 +1036,8 @@ func TestGatewaySSEWithoutContentTypeRequiresResponsesFraming(t *testing.T) {
 		want        int
 	}{
 		{"responses-stream", responses, nil, http.StatusOK},
+		{"cr-only-stream", strings.ReplaceAll(responses, "\r\n", "\r"), nil, http.StatusOK},
+		{"bom-before-first-event", "\uFEFF" + message, nil, http.StatusOK},
 		{"json-type-with-generic-event-name", message, nil, http.StatusOK},
 		{"non-data-credential", credential, nil, http.StatusOK},
 		{"escaped-json-credential", escapedCredential, nil, http.StatusOK},
@@ -1008,9 +1072,10 @@ func TestGatewaySSEWithoutContentTypeRequiresResponsesFraming(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.StatusCode, tc.want)
 			}
 			if tc.want == http.StatusOK {
-				wantBody := strings.NewReplacer("\r\n", "\n", "access-chatgpt", "[redacted]", `"delta":"\u0061ccess-chatgpt","delta":"safe"`, `"delta":"safe"`,
+				wantBody := strings.NewReplacer("\r\n", "\n", "\r", "\n", "\uFEFF", "", "access-chatgpt", "[redacted]", `"delta":"\u0061ccess-chatgpt","delta":"safe"`, `"delta":"safe"`,
 					`\u0061ccess-chatgpt`, "[redacted]",
-					missingResponse, "", missingResponseID, "").Replace(tc.body)
+					missingResponse, "", missingResponseID, "",
+					`{"response":{"id":"resp_fixture"}}`, `{"response":{"id":"resp_fixture"},"type":"response.created"}`).Replace(tc.body)
 				if response.Header.Get("Content-Type") != "text/event-stream" || body != wantBody {
 					t.Fatal("SSE changed framing, missed redaction, or did not set the downstream content type")
 				}

@@ -188,7 +188,7 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 		idle.Reset(streamIdleTimeout)
 	}, func(event sseEvent) error {
 		var kind string
-		eventKind, valid := responsesSSEKind(event)
+		eventKind, named, valid := responsesSSEKind(event)
 		if valid {
 			kind = progress.observe(event.data, event.kind)
 		}
@@ -197,6 +197,19 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 			return nil
 		}
 		data := event.data
+		if valid && named && isResponsesSSEKind(eventKind) {
+			// Codex reads the JSON type independently of the SSE event name.
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(data, &fields); err != nil {
+				return err
+			}
+			fields["type"], _ = json.Marshal(eventKind)
+			var err error
+			data, err = json.Marshal(fields)
+			if err != nil {
+				return err
+			}
+		}
 		if kind == "response.metadata" {
 			var err error
 			data, err = g.responseMetadata(data, scope, upstream)
@@ -206,15 +219,7 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 		}
 		data = redactSSEData(data, upstream.Token)
 		if !bytes.Equal(data, event.data) {
-			event.wire = event.wire[:0]
-			if event.kind != "" {
-				event.wire = append(event.wire, "event: "...)
-				event.wire = append(event.wire, redactUpstreamString(event.kind, upstream.Token)...)
-				event.wire = append(event.wire, '\n')
-			}
-			event.wire = append(event.wire, "data: "...)
-			event.wire = append(event.wire, data...)
-			event.wire = append(event.wire, '\n', '\n')
+			event.wire = event.wireWithData(data)
 		}
 		// Raw SSE fields and comments bypass the JSON redactor.
 		for _, secret := range []string{upstream.Token.AccessToken, upstream.Token.RefreshToken, upstream.Token.IDToken} {
@@ -370,8 +375,8 @@ func probeResponsesSSE(body io.Reader) (io.Reader, bool) {
 			return nil
 		}
 		observed = true
-		kind, valid := responsesSSEKind(event)
-		recognized = valid && (strings.HasPrefix(kind, "response.") || kind == "error" || kind == "codex.rate_limits")
+		kind, _, valid := responsesSSEKind(event)
+		recognized = valid && isResponsesSSEKind(kind)
 		return nil
 	}, func() bool { return observed })
 	if err != nil || !recognized {
@@ -380,7 +385,11 @@ func probeResponsesSSE(body io.Reader) (io.Reader, bool) {
 	return io.MultiReader(bytes.NewReader(prefix.Bytes()), body), true
 }
 
-func responsesSSEKind(event sseEvent) (string, bool) {
+func isResponsesSSEKind(kind string) bool {
+	return strings.HasPrefix(kind, "response.") || kind == "error" || kind == "codex.rate_limits"
+}
+
+func responsesSSEKind(event sseEvent) (kind string, named, valid bool) {
 	var message *struct {
 		Type     string `json:"type"`
 		Response *struct {
@@ -389,13 +398,14 @@ func responsesSSEKind(event sseEvent) (string, bool) {
 	}
 	err := json.Unmarshal(event.data, &message)
 	if message == nil {
-		return "", false
+		return "", false, false
 	}
-	kind := message.Type
-	if kind == "" {
+	kind, named = message.Type, message.Type == ""
+	if named {
 		kind = event.kind
 	}
-	return kind, err == nil && (kind != "response.completed" || message.Response != nil && validGatewayID(message.Response.ID))
+	valid = err == nil && (kind != "response.completed" || message.Response != nil && validGatewayID(message.Response.ID))
+	return kind, named, valid
 }
 
 func redactSSEData(data []byte, grant codexupstream.Grant) []byte {
@@ -434,14 +444,55 @@ type sseEvent struct {
 	wire []byte
 }
 
+func (e sseEvent) wireWithData(data []byte) []byte {
+	wire := make([]byte, 0, len(e.wire)+len(data))
+	for line := range bytes.SplitSeq(bytes.TrimSuffix(e.wire, []byte("\n\n")), []byte("\n")) {
+		field, _, _ := bytes.Cut(line, []byte(":"))
+		if !bytes.Equal(field, []byte("data")) {
+			wire = append(append(wire, line...), '\n')
+		}
+	}
+	wire = append(wire, "data: "...)
+	return append(append(wire, data...), '\n', '\n')
+}
+
 var sseUnknownFrame = []byte("data: {\"type\":\"error\",\"error\":{\"type\":\"submission_outcome_unknown\",\"code\":\"submission_outcome_unknown\",\"message\":\"This turn may already have been submitted. Start a new turn.\"}}\n\n")
 
 var errStreamEventTooLarge = errors.New("SSE event exceeds the gateway limit")
 
+// SSE treats CR and LF as line endings. Consume CR immediately so a
+// CR-terminated event on a still-open stream can be dispatched without waiting
+// for the next byte, then discard the optional LF at the next scan.
+func splitSSELines() bufio.SplitFunc {
+	skipLF := false
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		start := 0
+		if skipLF && len(data) != 0 && data[0] == '\n' {
+			start = 1
+			skipLF = false
+		}
+		if end := bytes.IndexAny(data[start:], "\r\n"); end >= 0 {
+			end += start
+			skipLF = data[end] == '\r'
+			return end + 1, data[start:end], nil
+		}
+		if atEOF && len(data) > start {
+			return len(data), data[start:], nil
+		}
+		return start, nil, nil
+	}
+}
+
 func consumeSSE(scanner *bufio.Scanner, activity func([]byte), deliver func(sseEvent) error, terminal func() bool) error {
+	scanner.Split(splitSSELines())
 	var event sseEvent
+	firstLine := true
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		if firstLine {
+			line = bytes.TrimPrefix(line, []byte("\uFEFF"))
+			firstLine = false
+		}
 		activity(line)
 		if len(event.wire)+len(line)+1 > maxStreamEventBytes {
 			return errStreamEventTooLarge

@@ -89,15 +89,21 @@ func (g *gatewayTransport) openWebSocket(w http.ResponseWriter, r *http.Request,
 			return err
 		}
 		defer response.Body.Close()
+		var refusal *codexupstream.UpstreamError
+		errors.As(err, &refusal)
+		status := response.StatusCode
+		canFallback := status == http.StatusSwitchingProtocols || canFallbackOnUpgradeStatus(status)
+		if upstream.Client.Channel() == codexupstream.ChannelChatGPT && status == http.StatusForbidden &&
+			refusal != nil && refusal.Code == "subscription_sharing_route_not_supported" {
+			canFallback = true
+		}
 		var failure error
-		if response.StatusCode == http.StatusUpgradeRequired ||
-			response.StatusCode == http.StatusNotImplemented {
-			// No response.create has been delivered. The pinned client uses
-			// 426 to submit the same request via HTTP, with its full history.
+		if canFallback {
+			// The upstream did not establish a usable socket. No generation
+			// was sent, so the client can submit its full history over HTTP.
 			failure = gatewayFailure(426, "upstream_websocket_unavailable", "", "The bound upstream route requires HTTP streaming.")
 		} else {
-			var refusal *codexupstream.UpstreamError
-			if !errors.As(err, &refusal) {
+			if refusal == nil {
 				refusal = codexupstream.ClassifyResponseError(response)
 			}
 			failure = redactRefusal(refusal, upstream.Token)
@@ -180,10 +186,21 @@ type handshakeRefusal struct {
 	failure *codexupstream.UpstreamError
 }
 
+func canFallbackOnUpgradeStatus(status int) bool {
+	return status == http.StatusUpgradeRequired || status == http.StatusNotImplemented ||
+		status == http.StatusMethodNotAllowed || status/100 == 2
+}
+
 func (h *handshakeRefusal) RoundTrip(r *http.Request) (*http.Response, error) {
 	response, err := h.next.RoundTrip(r)
-	if err != nil || response.StatusCode == 101 {
+	if err != nil || response.StatusCode == http.StatusSwitchingProtocols {
 		return response, err
+	}
+	if canFallbackOnUpgradeStatus(response.StatusCode) {
+		// These statuses suffice to fall back. The response body can be a live stream.
+		_ = response.Body.Close()
+		response.Body = http.NoBody
+		return response, nil
 	}
 	// websocket.Dial samples error bodies up to 1024 bytes. Classify the
 	// complete bounded document before that truncation so detail survives.

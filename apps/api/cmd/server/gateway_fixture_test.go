@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -67,10 +68,12 @@ type fixtureOAuth struct {
 }
 
 type fixtureFault struct {
-	refuseUpgrade  bool
-	dropStream     bool
-	dropTerminal   bool
-	beforeExchange func(context.Context)
+	refuseUpgrade      bool
+	refuseUpgradeRoute bool
+	untypedSSE         bool
+	dropStream         bool
+	dropTerminal       bool
+	beforeExchange     func(context.Context)
 }
 
 type gatewayFixture struct {
@@ -372,9 +375,29 @@ func (f *gatewayFixture) responses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	lineEnd, prefix := "\n", ""
+	if f.fault.untypedSSE {
+		w.Header()["Content-Type"] = nil
+		lineEnd, prefix = "\r", "\uFEFF"
+	}
 	f.respond(w, r, body, "sse", func(event []byte) error {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, err := fmt.Fprintf(w, "data: %s\n\n", event)
+		var name string
+		if f.fault.untypedSSE && bytes.Contains(event, []byte(`"type":"response.completed"`)) {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(event, &fields); err != nil {
+				return err
+			}
+			delete(fields, "type")
+			var err error
+			event, err = json.Marshal(fields)
+			if err != nil {
+				return err
+			}
+			name = "event: response.completed" + lineEnd
+		}
+		_, err := fmt.Fprintf(w, "%s%sdata: %s%s%s", prefix, name, event, lineEnd, lineEnd)
+		prefix = ""
 		if err == nil {
 			err = http.NewResponseController(w).Flush()
 		}
@@ -386,6 +409,12 @@ func (f *gatewayFixture) websocket(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.upgrades++
 	f.mu.Unlock()
+	if f.fault.refuseUpgradeRoute {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error":{"code":"subscription_sharing_route_not_supported"}}`)
+		return
+	}
 	if f.fault.refuseUpgrade {
 		w.WriteHeader(http.StatusUpgradeRequired)
 		return
