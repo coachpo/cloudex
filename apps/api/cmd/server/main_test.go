@@ -157,3 +157,32 @@ func TestResetAdminRejectsMissingDatabase(t *testing.T) {
 		t.Fatalf("reset should leave the database missing: %v", err)
 	}
 }
+
+func TestGrantGatewaySettings(t *testing.T) {
+	t.Setenv("CLOUDEX_GATEWAY_ORIGIN", "https://gateway.example.test")
+	t.Setenv("CLOUDEX_OAUTH_CALLBACK_PORT", "1457")
+	t.Setenv("CLOUDEX_OAUTH_CALLBACK_BIND", "")
+	for _, tc := range []struct {
+		console string
+		ok      bool
+	}{
+		{"http://console.example.test", false},
+		{"https://console.example.test", true},
+		{"http://localhost:3000", true},
+		{"http://127.0.0.1:3000", true},
+	} {
+		t.Run(tc.console, func(t *testing.T) {
+			cfg, err := readGrantGatewaySettings(tc.console)
+			if !tc.ok {
+				if err == nil {
+					t.Fatal("accepted OAuth management on a public HTTP console")
+				}
+				return
+			}
+			if err != nil || cfg.origin != "https://gateway.example.test" ||
+				cfg.redirectURI != "http://127.0.0.1:1457/auth/callback" || cfg.callbackAddress != "127.0.0.1:1457" {
+				t.Fatalf("gateway settings = %+v, %v", cfg, err)
+			}
+		})
+	}
+}

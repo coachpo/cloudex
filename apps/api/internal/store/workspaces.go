@@ -107,19 +107,23 @@ func (s *Store) HostOperations(ctx context.Context, id string) ([]Operation, err
 	return collect(rows, err, scanOp)
 }
 
-func existingOperation(ctx context.Context, tx *sql.Tx, key, hash string) (Operation, error) {
+func (s *Store) IdempotentOperation(ctx context.Context, key, hash string) (Operation, error) {
+	return existingOperation(ctx, s.db, key, hash)
+}
+
+func existingOperation(ctx context.Context, db queryer, key, hash string) (Operation, error) {
 	if key == "" {
 		return Operation{}, ErrMissing
 	}
 	var id, previous string
-	err := tx.QueryRowContext(ctx, `SELECT id,request_hash FROM operations WHERE idempotency_key=?`, key).Scan(&id, &previous)
+	err := db.QueryRowContext(ctx, `SELECT id,request_hash FROM operations WHERE idempotency_key=?`, key).Scan(&id, &previous)
 	if err != nil {
 		return Operation{}, missing(err)
 	}
 	if previous != hash {
 		return Operation{}, ErrConflict
 	}
-	return scanOp(tx.QueryRowContext(ctx, "SELECT "+operationFields+" FROM operations WHERE id=?", id))
+	return scanOp(db.QueryRowContext(ctx, "SELECT "+operationFields+" FROM operations WHERE id=?", id))
 }
 
 func insertOp(ctx context.Context, tx *sql.Tx, w Workspace, kind string, target int, purge bool, key, hash string) (Operation, error) {
@@ -129,7 +133,11 @@ func insertOp(ctx context.Context, tx *sql.Tx, w Workspace, kind string, target 
 	return o, err
 }
 
-func (s *Store) Create(ctx context.Context, w Workspace, key, hash string, credential *RepositoryCredential) (o Operation, err error) {
+func (s *Store) Create(ctx context.Context, w Workspace, key, hash string, credential *RepositoryCredential) (Operation, error) {
+	return s.CreateWithGrant(ctx, w, key, hash, credential, "", 0)
+}
+
+func (s *Store) CreateWithGrant(ctx context.Context, w Workspace, key, hash string, credential *RepositoryCredential, grantID string, expectedGrantEpoch int64) (o Operation, err error) {
 	checkPlacement := w.HostID != ""
 	if !checkPlacement {
 		w.HostID = LocalHostID
@@ -154,6 +162,14 @@ func (s *Store) Create(ctx context.Context, w Workspace, key, hash string, crede
 		}
 		if credential != nil {
 			if e = writeRepositoryCredential(ctx, tx, w.ID, credential); e != nil {
+				return e
+			}
+		}
+		if grantID != "" {
+			if e = checkGrantEpoch(ctx, tx, grantID, expectedGrantEpoch); e != nil {
+				return e
+			}
+			if _, e = tx.ExecContext(ctx, `INSERT INTO workspace_grant_bindings (workspace_id,grant_id,binding_revision) VALUES (?,?,1)`, w.ID, grantID); e != nil {
 				return e
 			}
 		}
@@ -205,9 +221,11 @@ func (s *Store) Enqueue(ctx context.Context, id, kind string, purge bool, key, h
 			return e
 		}
 		if kind == "rebuild" || kind == "reset" {
-			return reacquireReservation(ctx, tx, w, o)
+			if e := reacquireReservation(ctx, tx, w, o); e != nil {
+				return e
+			}
 		}
-		return nil
+		return revokeCredentials(ctx, tx, "workspace_id=?", id)
 	})
 	return
 }
@@ -235,8 +253,8 @@ func (s *Store) ClaimOp(ctx context.Context, requireLocalLease ...bool) (o Opera
 		if e != nil {
 			return e
 		}
-		// A start rejected by preflight must not change the Workspace.
-		if o.Type == "start" {
+		// Start and replacement preflights leave the current observation intact.
+		if o.Type == "start" || o.Type == "rebuild" || o.Type == "reset" {
 			return nil
 		}
 		desired, observed := w.Desired, w.Observed
@@ -245,8 +263,6 @@ func (s *Store) ClaimOp(ctx context.Context, requireLocalLease ...bool) (o Opera
 			observed = "creating"
 		case "stop":
 			desired = "stopped"
-		case "rebuild", "reset":
-			observed = "rebuilding"
 		case "delete":
 			desired, observed = "stopped", "deleting"
 		}
@@ -255,6 +271,15 @@ func (s *Store) ClaimOp(ctx context.Context, requireLocalLease ...bool) (o Opera
 		return e
 	})
 	return
+}
+
+// BeginReplacement marks the old generation unavailable immediately before
+// replacement work may touch Docker state.
+func (s *Store) BeginReplacement(ctx context.Context, op Operation) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE workspaces SET observed_state='rebuilding',updated_at=?
+ WHERE id=? AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM operations WHERE id=? AND workspace_id=workspaces.id
+ AND type IN ('rebuild','reset') AND status='running' AND attempts=?)`, now(), op.WorkspaceID, op.ID, op.Attempts)
+	return affected(res, err, ErrBusy)
 }
 
 func (s *Store) OpPhase(ctx context.Context, id string, phase int) error {
@@ -345,6 +370,9 @@ func (s *Store) finishOp(ctx context.Context, o Operation, state string, c *Cont
 			if e := writeRepositoryCredential(ctx, tx, o.WorkspaceID, nil); e != nil {
 				return e
 			}
+			if e := deleteWorkspaceGrant(ctx, tx, o.WorkspaceID); e != nil {
+				return e
+			}
 		}
 		if state == "deleted" || releaseCreate {
 			if e := resolveReservation(ctx, tx, o.WorkspaceID, state == "deleted" && !o.Purge); e != nil {
@@ -382,6 +410,9 @@ func (s *Store) CancelOp(ctx context.Context, id string) error {
 		}
 		if kind == "create" {
 			if err := writeRepositoryCredential(ctx, tx, workspaceID, nil); err != nil {
+				return err
+			}
+			if err := deleteWorkspaceGrant(ctx, tx, workspaceID); err != nil {
 				return err
 			}
 			_, err = tx.ExecContext(ctx, `UPDATE workspaces SET desired_state='stopped',observed_state='deleted',deleted_at=?,updated_at=? WHERE id=?`, now(), now(), workspaceID)

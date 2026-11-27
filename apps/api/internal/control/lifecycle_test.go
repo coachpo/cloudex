@@ -41,7 +41,10 @@ func (e *lifecycleEngine) Ensure(_ context.Context, s runtime.Spec) (runtime.Con
 		}
 	}
 	if e.containers[s.Generation] == nil {
-		e.containers[s.Generation] = &runtime.Container{ID: fmt.Sprintf("generation-%d", s.Generation), ImageID: "fixture", State: "created"}
+		e.containers[s.Generation] = &runtime.Container{
+			ID: fmt.Sprintf("generation-%d", s.Generation), ImageID: "fixture", State: "created",
+			Labels: map[string]string{runtime.CreationOperationLabel: s.CreationOperationID},
+		}
 	}
 	return *e.containers[s.Generation], nil
 }

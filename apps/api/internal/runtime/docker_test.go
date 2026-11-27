@@ -71,6 +71,25 @@ func dockerHTTPFixture(t *testing.T, handler http.HandlerFunc) *Docker {
 	return d
 }
 
+func writeWorkspaceInspect(w http.ResponseWriter, id, name string, state container.ContainerState) {
+	writeWorkspaceInspectForOperation(w, id, name, state, "")
+}
+
+func writeWorkspaceInspectForOperation(w http.ResponseWriter, id, name string, state container.ContainerState, operationID string) {
+	w.Header().Set("Content-Type", "application/json")
+	labels := map[string]string{
+		instanceLabel: "fixture-instance", "cloud.managed": "true", hostLabel: "",
+		workspaceLabel: "workspace", generationLabel: "1",
+	}
+	if operationID != "" {
+		labels[CreationOperationLabel] = operationID
+	}
+	_ = json.NewEncoder(w).Encode(container.InspectResponse{
+		ID: id, Name: name, State: &container.State{Status: state, Running: state == container.StateRunning},
+		Config: &container.Config{User: "0:0", Labels: labels},
+	})
+}
+
 func TestMetricsDistinguishesUnavailableSamplesFromDockerErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -234,7 +253,6 @@ func TestPurgeRemovesProjectAndOptionallyOtherVolumes(t *testing.T) {
 	const workspace = "workspace"
 	const project = "cloudex-fixture-inst-workspace-data"
 	const ssh = "cloudex-fixture-inst-workspace-ssh"
-	const home = "cloudex-fixture-inst-workspace-home"
 	for _, tc := range []struct {
 		name     string
 		revision int
@@ -243,7 +261,7 @@ func TestPurgeRemovesProjectAndOptionallyOtherVolumes(t *testing.T) {
 	}{
 		{"reset", 0, false, []string{project}},
 		{"second reset", 1, false, []string{project + "-r1"}},
-		{"purge", 2, true, []string{project + "-r2", ssh, home}},
+		{"purge", 2, true, []string{project + "-r2", ssh}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -280,6 +298,112 @@ func TestPurgeRemovesProjectAndOptionallyOtherVolumes(t *testing.T) {
 			defer mu.Unlock()
 			if !slices.Equal(removed, tc.want) {
 				t.Errorf("removed %v, want %v", removed, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureUsesFreshHomeAndExternalWorkspaceVolumes(t *testing.T) {
+	const name = "/cloudex-fixture-inst-workspace-g1"
+	const id = "workspace-container"
+	var created atomic.Bool
+	d := dockerHTTPFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v1.54/containers" + name + "/json":
+			if !created.Load() {
+				http.Error(w, `{"message":"missing container"}`, http.StatusNotFound)
+				return
+			}
+			writeWorkspaceInspect(w, id, name, container.StateCreated)
+		case "GET /v1.54/images/test-workspace/json":
+			_ = json.NewEncoder(w).Encode(struct{}{})
+		case "GET /v1.54/volumes/cloudex-fixture-inst-workspace-data", "GET /v1.54/volumes/cloudex-fixture-inst-workspace-ssh":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": map[string]string{
+				instanceLabel: "fixture-instance", hostLabel: "", workspaceLabel: "workspace", "cloud.managed": "true",
+			}})
+		case "POST /v1.54/containers/create":
+			var request struct{ HostConfig container.HostConfig }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode Docker create request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			var targets []string
+			for _, mount := range request.HostConfig.Mounts {
+				targets = append(targets, mount.Target)
+			}
+			if !slices.Equal(targets, []string{workspaceMount, sshHostKeyMount}) {
+				t.Errorf("container mount targets = %v", targets)
+			}
+			created.Store(true)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": id})
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	got, err := d.Ensure(t.Context(), Spec{WorkspaceID: "workspace", Generation: 1, Image: "test-workspace"})
+	if err != nil || got.ID != id || got.State != "created" {
+		t.Fatalf("Ensure returned %+v, %v", got, err)
+	}
+}
+
+func TestEnsureAdoptsOnlyCandidateCreatedBySameOperation(t *testing.T) {
+	const operationID = "current-operation"
+	const name = "/cloudex-fixture-inst-workspace-g1"
+	for _, oldOperation := range []string{operationID, "failed-operation", ""} {
+		t.Run("previous label "+oldOperation, func(t *testing.T) {
+			var created, removed atomic.Bool
+			d := dockerHTTPFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method + " " + r.URL.Path {
+				case "GET /v1.54/containers" + name + "/json":
+					if created.Load() {
+						writeWorkspaceInspectForOperation(w, "new", name, container.StateCreated, operationID)
+					} else {
+						writeWorkspaceInspectForOperation(w, "previous", name, container.StateRunning, oldOperation)
+					}
+				case "DELETE /v1.54/containers/previous":
+					if removed.Swap(true) || r.URL.Query().Get("force") != "1" {
+						t.Error("expected one forced removal by exact container ID")
+					}
+					w.WriteHeader(http.StatusNoContent)
+				case "GET /v1.54/images/test-workspace/json":
+					_ = json.NewEncoder(w).Encode(struct{}{})
+				case "GET /v1.54/volumes/cloudex-fixture-inst-workspace-data", "GET /v1.54/volumes/cloudex-fixture-inst-workspace-ssh":
+					_ = json.NewEncoder(w).Encode(map[string]any{"Labels": map[string]string{
+						instanceLabel: "fixture-instance", hostLabel: "", workspaceLabel: "workspace", "cloud.managed": "true",
+					}})
+				case "POST /v1.54/containers/create":
+					var config container.Config
+					if err := json.NewDecoder(r.Body).Decode(&config); err != nil ||
+						config.Labels[CreationOperationLabel] != operationID || !removed.Load() {
+						t.Errorf("candidate was not created under the current operation after removing the old one: %v", err)
+					}
+					created.Store(true)
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(map[string]string{"Id": "new"})
+				default:
+					t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			target := Spec{WorkspaceID: "workspace", Generation: 1, Image: "test-workspace", CreationOperationID: operationID}
+			got, err := d.Ensure(t.Context(), target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if oldOperation == operationID {
+				if got.ID != "previous" || removed.Load() || created.Load() {
+					t.Fatal("replaying the same operation must preserve its candidate")
+				}
+			} else if got.ID != "new" || !removed.Load() || !created.Load() {
+				t.Fatal("the candidate from an earlier operation survived replacement")
+			}
+			if !got.CreatedByOperation(operationID) {
+				t.Fatal("returned candidate is not attributed to the current operation")
 			}
 		})
 	}

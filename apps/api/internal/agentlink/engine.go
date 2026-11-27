@@ -86,9 +86,12 @@ func (e *engine) Start(ctx context.Context, id string) error {
 	return err
 }
 
-func (e *engine) WriteInitialCodexFiles(ctx context.Context, spec runtime.Spec, id string, config runtime.InitialCodexFiles) error {
-	_, err := callValue[struct{}](ctx, e, request{Method: "write-initial-codex-files", Spec: &spec, ID: id, InitialCodexFiles: &config})
-	return err
+func (e *engine) InspectGatewayCredential(ctx context.Context, spec runtime.Spec, instance runtime.GatewayInstance) (runtime.GatewayCredentialConfirmation, error) {
+	return callValue[runtime.GatewayCredentialConfirmation](ctx, e, request{Method: "inspect-gateway-credential", Spec: &spec, GatewayInstance: &instance})
+}
+
+func (e *engine) InstallGatewayCredential(ctx context.Context, spec runtime.Spec, instance runtime.GatewayInstance, install runtime.GatewayCredentialInstall) (runtime.GatewayCredentialConfirmation, error) {
+	return callValue[runtime.GatewayCredentialConfirmation](ctx, e, request{Method: "install-gateway-credential", Spec: &spec, GatewayInstance: &instance, GatewayInstall: &install})
 }
 
 func (e *engine) ApplyGitCredential(ctx context.Context, spec runtime.Spec, id string, credential runtime.GitCredential) error {

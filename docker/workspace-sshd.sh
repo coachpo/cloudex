@@ -2,6 +2,7 @@
 set -eu
 umask 077
 
+/usr/local/bin/workspace-control gateway-init
 mkdir -p /run/sshd /run/cloudex-ssh
 chmod 0700 /var/lib/cloudex-ssh
 host_key=/var/lib/cloudex-ssh/ssh_host_ed25519_key

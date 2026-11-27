@@ -67,7 +67,8 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 			MemoryBytes int64 `json:"memory_bytes"`
 			Disk        int64 `json:"disk_bytes"`
 		} `json:"resources"`
-		AutoStart *bool `json:"auto_start"`
+		AutoStart *bool  `json:"auto_start"`
+		GrantID   string `json:"grant_id"`
 	}
 	if !parse(w, r, &in, false) {
 		return
@@ -157,6 +158,13 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	if credential != nil {
 		metadata = append(metadata, credential.Username)
 	}
+	if in.GrantID != "" {
+		if s.GrantGateway == nil {
+			problem(w, r, http.StatusServiceUnavailable, "gateway_not_configured", "The gateway is unavailable.")
+			return
+		}
+		metadata = append(metadata, in.GrantID)
+	}
 	settings, e := s.Store.Settings(r.Context())
 	if e != nil {
 		failure(w, r, e)
@@ -164,9 +172,14 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	ws := store.Workspace{ID: store.ID(), Name: in.Name, Image: settings.WorkspaceImage, RepoURL: in.Repository.URL, Branch: in.Repository.Branch,
 		CPU: in.Resources.CPU, Memory: in.Resources.Memory, Desired: desired, HostID: in.Placement.HostID, Disk: in.Resources.Disk}
-	o, e := s.Store.Create(r.Context(), ws, key, fingerprint(metadata), credential)
+	var o store.Operation
+	if in.GrantID == "" {
+		o, e = s.Store.Create(r.Context(), ws, key, fingerprint(metadata), credential)
+	} else {
+		o, e = s.GrantGateway.CreateWorkspace(r.Context(), ws, key, fingerprint(metadata), credential, in.GrantID)
+	}
 	if e != nil {
-		failure(w, r, e)
+		grantFailure(w, r, e)
 		return
 	}
 	data := operationReceipt(o)
@@ -207,7 +220,11 @@ func (s *Server) operation(kind string) http.HandlerFunc {
 			bad(w, r, "Confirm the workspace ID before resetting or deleting.")
 			return
 		}
-		o, e := s.Store.Enqueue(r.Context(), workspaceID(r), kind, in.Purge, key, fingerprint([]any{workspaceID(r), kind, in.Purge}))
+		enqueue := s.Store.Enqueue
+		if s.GrantGateway != nil {
+			enqueue = s.GrantGateway.Enqueue
+		}
+		o, e := enqueue(r.Context(), workspaceID(r), kind, in.Purge, key, fingerprint([]any{workspaceID(r), kind, in.Purge}))
 		if e != nil {
 			failure(w, r, e)
 			return

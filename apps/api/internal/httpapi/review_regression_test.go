@@ -38,8 +38,10 @@ type failedInitEngine struct {
 	removed chan runtime.Spec
 }
 
-func (e failedInitEngine) Ensure(context.Context, runtime.Spec) (runtime.Container, error) {
-	return runtime.Container{ID: "failed-candidate", State: "created"}, nil
+func (e failedInitEngine) Ensure(_ context.Context, spec runtime.Spec) (runtime.Container, error) {
+	return runtime.Container{
+		ID: "failed-candidate", State: "created", Labels: map[string]string{runtime.CreationOperationLabel: spec.CreationOperationID},
+	}, nil
 }
 
 func (e failedInitEngine) SyncAuthorizedKeys(context.Context, string, []string) error { return nil }

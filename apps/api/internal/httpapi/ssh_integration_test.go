@@ -262,10 +262,7 @@ test ! -r /var/lib/cloudex-ssh/ssh_host_ed25519_key
 test ! -w /run/cloudex-ssh/authorized_keys
 test "$(stat -c '%u:%g:%a' /run/cloudex-ssh/authorized_keys)" = 0:0:644
 printf kept >/workspace/project/ssh-fixture
-printf kept >~/.codex/ssh-fixture
-test ! -e ~/.codex/AGENTS.md
-test ! -e ~/.codex/auth.json
-printf "%s\n" "cli_auth_credentials_store = \"file\"" | cmp - ~/.codex/config.toml
+printf kept >~/.ssh-lifecycle-fixture
 '`)
 	if e != nil || !strings.Contains(string(out), "/usr/local/bin/codex") {
 		t.Fatalf("workspace login shell: %s %v", out, e)
@@ -323,10 +320,9 @@ printf "%s\n" "cli_auth_credentials_store = \"file\"" | cmp - ~/.codex/config.to
 	}
 	out, e = shell.CombinedOutput(`set -eu
 test "$(cat /workspace/project/ssh-fixture)" = kept
-test "$(cat ~/.codex/ssh-fixture)" = kept
-test ! -e ~/.codex/auth.json`)
+test ! -e ~/.ssh-lifecycle-fixture`)
 	if e != nil {
-		t.Fatalf("rebuild did not preserve project and home files: %s %v", out, e)
+		t.Fatalf("rebuild did not keep the project and replace the container home: %s %v", out, e)
 	}
 	sshSession.Close()
 	rotate()

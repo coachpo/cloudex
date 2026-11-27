@@ -454,45 +454,33 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 		return created.Workspace, path, info
 	}
 	imageWorkspace, imagePath, imageInfo := create("image home")
-	if !a.exec(d, imageInfo.ID, `test -w ~/.config && test -s ~/.bashrc &&
-printf '%s\n' 'cli_auth_credentials_store = "file"' | cmp - ~/.codex/config.toml &&
-test ! -e ~/.codex/auth.json`) {
-		t.Fatal("the fresh home volume did not inherit the image's home files")
+	if !a.exec(d, imageInfo.ID, `test -w ~/.config && test -s ~/.bashrc`) {
+		t.Fatal("the fresh container did not inherit the image's home files")
 	}
 	var op acceptance
 	a.call("DELETE", imagePath, map[string]any{"confirm": imageWorkspace, "purge": true}, 202, &op)
 	a.opDone(op.Op)
 
-	settings := store.InitialCodexFiles{AgentsMD: "Initial workspace instructions\n",
-		ConfigTOML: runtime.CodexConfigSeed + "# Initial text\nmodel = 'workspace-model'\n"}
-	a.call("PUT", "/settings/codex-files", settings, 200, nil)
 	workspace, path, info := create("acceptance")
 	old := info.ID
-	if info.State != "running" || len(info.Mounts) != 3 || old == "" {
+	if info.State != "running" || old == "" {
 		t.Fatalf("inspect: %+v", info)
 	}
 	a.call("GET", path+"/metrics", nil, 200, nil)
 	a.call("GET", "/hosts/local/containers", nil, 200, nil)
-	// Docker seeds the empty home volume before the initial files are copied in.
-	if !a.exec(d, info.ID, `set -eu
-test -s ~/.bashrc
-printf '%s\n' 'Initial workspace instructions' | cmp - ~/.codex/AGENTS.md
-printf '%s\n' 'cli_auth_credentials_store = "file"' '# Initial text' "model = 'workspace-model'" | cmp - ~/.codex/config.toml
-test ! -e ~/.codex/auth.json
-test "$(stat -c '%u:%g:%a' ~/.codex/AGENTS.md)" = 10001:10001:644
-test "$(stat -c '%u:%g:%a' ~/.codex/config.toml)" = 10001:10001:600`) {
-		t.Fatal("Create did not keep the image's home files and write the initial Codex files")
-	}
-	var homeVolume string
+	var projectVolume, sshVolume string
 	for _, mount := range info.Mounts {
-		if mount.Destination == "/home/coder" {
-			homeVolume = mount.Name
+		switch mount.Destination {
+		case "/workspace":
+			projectVolume = mount.Name
+		case "/var/lib/cloudex-ssh":
+			sshVolume = mount.Name
 		}
 	}
-	if homeVolume == "" {
-		t.Fatal("Docker did not report the named home volume")
+	if projectVolume == "" || sshVolume == "" {
+		t.Fatal("Docker did not report the project and SSH host identity volumes")
 	}
-	out := a.shell(path, 113, 37, `printf '%s' "$$" > terminal.pid; printf "kept\n" > keep.txt; printf "login-fixture" > ~/.codex/local-fixture; stty size; printf 'TERM%s\n' '_DONE'`, "TERM_DONE")
+	out := a.shell(path, 113, 37, `printf '%s' "$$" > terminal.pid; printf "kept\n" > keep.txt; printf "login-fixture" > ~/.lifecycle-fixture; stty size; printf 'TERM%s\n' '_DONE'`, "TERM_DONE")
 	if !strings.Contains(out, "37 113") {
 		t.Fatalf("PTY size missing: %q", out)
 	}
@@ -500,29 +488,24 @@ test "$(stat -c '%u:%g:%a' ~/.codex/config.toml)" = 10001:10001:600`) {
 		return a.exec(d, info.ID, `test -s terminal.pid && ! kill -0 "$(cat terminal.pid)" 2>/dev/null`)
 	})
 	if !a.exec(d, info.ID, `set -eu
-printf 'model = "manual"\n' > ~/.codex/config.toml
-printf 'local instructions\n' > ~/.codex/AGENTS.md
-printf '{"fixture":"synthetic-login"}\n' > ~/.codex/auth.json
 mkdir -p ~/.local/bin
 printf 'user tool' > ~/.local/bin/fixture-tool`) {
-		t.Fatal("could not prepare local files in the named home volume")
+		t.Fatal("could not prepare local files in the container home")
 	}
-	a.call("PUT", "/settings/codex-files", store.InitialCodexFiles{
-		AgentsMD: "Future Workspace instructions\n", ConfigTOML: "model = 'future-workspace'\n",
-	}, 200, nil)
-	checkLocalCodex := `set -eu
-grep -Fxq 'model = "manual"' ~/.codex/config.toml
-grep -Fxq 'local instructions' ~/.codex/AGENTS.md
-grep -Fxq '{"fixture":"synthetic-login"}' ~/.codex/auth.json
+	checkLocalHome := `set -eu
 grep -Fxq 'user tool' ~/.local/bin/fixture-tool
-grep -Fxq 'login-fixture' ~/.codex/local-fixture`
+grep -Fxq 'login-fixture' ~/.lifecycle-fixture`
+	checkFreshHome := `set -eu
+test -s ~/.bashrc
+test ! -e ~/.local/bin/fixture-tool
+test ! -e ~/.lifecycle-fixture`
 	var activate acceptance
 	a.call("POST", path+"/stop", nil, 202, &activate)
 	a.opDone(activate.Op)
 	a.call("POST", path+"/start", nil, 202, &activate)
 	a.opDone(activate.Op)
 	a.call("GET", path+"/inspect", nil, 200, &info)
-	if info.ID != old || !a.exec(d, info.ID, checkLocalCodex) {
+	if info.ID != old || !a.exec(d, info.ID, checkLocalHome) {
 		t.Fatal("Stop and Start should preserve the original container and its home files")
 	}
 
@@ -535,11 +518,26 @@ grep -Fxq 'login-fixture' ~/.codex/local-fixture`
 		t.Fatal("saving the repository credential changed the existing container")
 	}
 
+	if _, err := docker.ContainerKill(ctx, old, client.ContainerKillOptions{Signal: "SIGKILL"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := docker.ContainerRemove(ctx, old, client.ContainerRemoveOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
 	a.call("POST", path+"/rebuild", nil, 202, &activate)
 	a.opDone(activate.Op)
 	a.call("GET", path+"/inspect", nil, 200, &info)
-	if info.ID == old || !a.exec(d, info.ID, checkLocalCodex) {
-		t.Fatal("Rebuild did not preserve the home files")
+	if info.ID == old || !a.exec(d, info.ID, checkFreshHome+`
+test "$(cat keep.txt)" = kept`) {
+		t.Fatal("Rebuild after container loss did not initialize a fresh home and keep the project")
+	}
+	var keptSSHVolume, hasHomeVolume bool
+	for _, mount := range info.Mounts {
+		hasHomeVolume = hasHomeVolume || mount.Destination == "/home/coder"
+		keptSSHVolume = keptSSHVolume || (mount.Destination == "/var/lib/cloudex-ssh" && mount.Name == sshVolume)
+	}
+	if hasHomeVolume || !keptSSHVolume {
+		t.Fatal("Rebuild did not retain the SSH host identity volume and omit the home mount")
 	}
 	if !a.exec(d, info.ID, `export GIT_TERMINAL_PROMPT=0
 test "$(stat -c '%u:%g:%a' /etc/cloudex/git-credential.json)" = 10001:10001:600 || exit 1
@@ -588,9 +586,8 @@ printf 'after\n' > tracked.txt`) {
 	a.call("POST", path+"/start", nil, 202, &op)
 	a.opDone(op.Op)
 
-	if !a.exec(d, info.ID, checkLocalCodex+`
-test "$(cat keep.txt)" = kept`) {
-		t.Fatal("Rebuild did not preserve project and home files")
+	if !a.exec(d, info.ID, `printf 'reset sentinel' > ~/.lifecycle-fixture`) {
+		t.Fatal("could not prepare home state before Reset")
 	}
 	a.call("DELETE", path+"/repository-credential", nil, 204, nil)
 	if !a.exec(d, info.ID, `test -f /etc/cloudex/git-credential.json`) {
@@ -602,14 +599,21 @@ test "$(cat keep.txt)" = kept`) {
 	a.call("POST", path+"/reset", map[string]string{"confirm": workspace}, 202, &op)
 	a.opDone(op.Op)
 	a.call("GET", path+"/inspect", nil, 200, &info)
-	if info.ID == old || !a.exec(d, info.ID, checkLocalCodex+"\ntest ! -e keep.txt && test ! -e /etc/cloudex/git-credential.json") {
-		t.Fatal("Reset did not keep home files, recreate the project, or omit the cleared credential")
+	if info.ID == old || !a.exec(d, info.ID, checkFreshHome+"\ntest ! -e keep.txt && test ! -e /etc/cloudex/git-credential.json") {
+		t.Fatal("Reset did not initialize a fresh home, recreate the project, or omit the cleared credential")
+	}
+	for _, mount := range info.Mounts {
+		if mount.Destination == "/workspace" {
+			projectVolume = mount.Name
+		}
 	}
 	a.call("DELETE", path, map[string]any{"confirm": workspace, "purge": true}, 202, &op)
 	a.opDone(op.Op)
 	a.call("GET", path, nil, 404, nil)
-	if _, err := docker.VolumeInspect(ctx, homeVolume, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
-		t.Fatalf("Purge did not remove the home volume: %v", err)
+	for _, volume := range []string{projectVolume, sshVolume} {
+		if _, err := docker.VolumeInspect(ctx, volume, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
+			t.Fatalf("Purge did not remove volume %q: %v", volume, err)
+		}
 	}
 }
 

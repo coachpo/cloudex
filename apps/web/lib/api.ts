@@ -6,11 +6,13 @@ export const noResponseMessage = "The control plane did not return a response.";
 export class APIError extends Error {
   readonly status: number;
   readonly code?: string;
+  readonly details?: unknown;
 
-  constructor(status: number, message: string, code?: string) {
+  constructor(status: number, message: string, code?: string, details?: unknown) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -21,7 +23,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 204) return undefined as T;
   const json = await response.json().catch(() => null);
   if (!response.ok || json === null || typeof json !== "object" || !("data" in json)) {
-    throw new APIError(response.status, json?.error?.message ?? noResponseMessage, json?.error?.code);
+    throw new APIError(response.status, json?.error?.message ?? noResponseMessage, json?.error?.code, json?.error?.details);
   }
   return json.data as T;
 }
@@ -60,6 +62,14 @@ export type Workspace = {
   assigned_host_id: string; disk_bytes: number;
   desired_state: string; observed_state: string; paused: boolean; generation: number; error: string; updated_at: string;
 };
+export type GrantBinding = {
+  workspace_id: string;
+  grant_id?: string | null;
+  binding_revision: number;
+  readiness: "unbound" | "pending" | "ready" | "unavailable";
+  reason?: string;
+};
+
 export type RepositoryCredentialStatus = { configured: boolean; username: string };
 export type Operation = {
   id: string; workspace_id: string; type: string; status: string; target_generation: number;
@@ -127,6 +137,14 @@ export type Metrics = { cpu_percent: number | null; memory_bytes: number; memory
 export const active = (state?: string) => state === "queued" || state === "running";
 export const workspaceState = (w: Workspace) => w.paused && w.observed_state === "stopped" ? "paused" : w.observed_state;
 export const wsPath = (id: string) => "/workspaces/" + encodeURIComponent(id);
+export const grantBindingPath = (id: string) => wsPath(id) + "/grant-binding";
+export function changeGrantBinding(id: string, grantID: string, revision: number) {
+  return api<GrantBinding>(grantBindingPath(id), {
+    method: grantID ? "PUT" : "DELETE",
+    headers: { "If-Match": '"' + revision + '"' },
+    body: grantID ? JSON.stringify({ grant_id: grantID }) : undefined,
+  });
+}
 export const repositoryCredentialPath = (id: string) => wsPath(id) + "/repository-credential";
 export const repositoryCredentialKey = (id: string) => ["repository-credential", id] as const;
 export const repositoryCredentialQuery = (id: string) => ({

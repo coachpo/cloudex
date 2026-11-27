@@ -1,0 +1,1002 @@
+package codexgateway
+
+import (
+	"bufio"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/coachpo/cloudex/apps/api/internal/codexupstream"
+	"github.com/coachpo/cloudex/apps/api/internal/store"
+	"github.com/coder/websocket"
+)
+
+type transportFixture struct {
+	t       *testing.T
+	service *Service
+	server  *httptest.Server
+	db      *store.Store
+}
+
+func newTransportFixture(t *testing.T, adapters ...*codexupstream.Client) *transportFixture {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "gateway.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	block, _ := aes.NewCipher(make([]byte, 32))
+	key, _ := cipher.NewGCM(block)
+	return newTransportFixtureWithDB(t, db, key, adapters...)
+}
+
+func newTransportFixtureWithDB(t *testing.T, db *store.Store, key cipher.AEAD, adapters ...*codexupstream.Client) *transportFixture {
+	t.Helper()
+	service, err := New(t.Context(), Config{Store: db, Key: key, Origin: "https://fixture.invalid", Clients: adapters})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(service.Close)
+	gateway := httptest.NewServer(service.GatewayHandler())
+	t.Cleanup(gateway.Close)
+	return &transportFixture{t: t, service: service, server: gateway, db: db}
+}
+
+func (f *transportFixture) grant(adapter *codexupstream.Client) store.Grant {
+	f.t.Helper()
+	channel := adapter.Channel()
+	token := codexupstream.Grant{
+		ClientID: codexupstream.CodexClientID, Subject: "fixture-user-" + channel,
+		UserID: "fixture-user-" + channel, AccountID: "fixture-account-" + channel,
+		AccessToken: "access-" + channel, RefreshToken: "refresh-" + channel, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if channel == codexupstream.ChannelChatGPT {
+		token.ClientID = "fixture-issued"
+		token.Resource = codexupstream.ChatGPTResource
+		token.Scopes = []string{"chatgpt.tokens.use.direct"}
+		token.AccountID = ""
+	}
+	record, err := f.service.grantRecord(store.ID(), adapter, token)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.db.AddGrant(f.t.Context(), record); err != nil {
+		f.t.Fatal(err)
+	}
+	record, err = f.db.Grant(f.t.Context(), record.ID)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return record
+}
+
+func (f *transportFixture) workspace(name string, grant store.Grant) (store.Workspace, string) {
+	f.t.Helper()
+	ctx := f.t.Context()
+	w := store.Workspace{ID: store.ID(), Name: name, Image: "fixture", Branch: "main", Desired: "running", CPU: 1000, Memory: 1024}
+	op, err := f.db.CreateWithGrant(ctx, w, "", "", nil, grant.ID, grant.GrantEpoch)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	running, _, err := f.db.ClaimOp(ctx)
+	if err != nil || running.ID != op.ID {
+		f.t.Fatalf("claim: %v %v", running, err)
+	}
+	record := store.Container{ID: store.ID(), Generation: op.Target, ImageID: "fixture", Status: "running"}
+	if err := f.db.FinishOp(ctx, running, "running", &record, ""); err != nil {
+		f.t.Fatal(err)
+	}
+	w, err = f.db.Workspace(ctx, w.ID)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return w, f.install(w, record.ID, grant)
+}
+
+func (f *transportFixture) install(w store.Workspace, docker string, grant store.Grant) string {
+	f.t.Helper()
+	ctx := f.t.Context()
+	b, err := f.db.Binding(ctx, w.ID)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	token := store.ID()
+	pending, err := f.db.IssueCredential(ctx, store.GatewayCredential{
+		WorkspaceID: w.ID, HostID: w.HostID, Generation: w.Generation, DockerID: docker,
+		StartedAt: "fixture-start", Digest: store.GatewayCredentialDigest(token), GrantID: grant.ID,
+		GrantEpoch: grant.GrantEpoch, BindingRevision: b.BindingRevision,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	ws := f.service.workspaceState(w.ID)
+	if err := f.service.confirmInstallation(ctx, ws, ws.verification, pending); err != nil {
+		f.t.Fatal(err)
+	}
+	return token
+}
+
+func transportAdapter(t *testing.T, channel, base string, client *http.Client) *codexupstream.Client {
+	t.Helper()
+	config := codexupstream.OpenAICodexConfig()
+	if channel == codexupstream.ChannelChatGPT {
+		config = codexupstream.ChatGPTConfig()
+	}
+	config.Issuer = base
+	config.AuthorizationURL, config.TokenURL, config.JWKSURL = base+"/authorize", base+"/token", base+"/keys"
+	config.RevokeURL, config.DiscoveryURL = base+"/revoke", base+"/.well-known/openid-configuration"
+	config.AccountsURL, config.ModelsURL, config.ResponsesURL = base+"/accounts", base+"/models", base+"/responses"
+	config.HTTPClient = client
+	adapter, err := codexupstream.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+const transportModel = "gpt-6.2-sol"
+
+func transportCatalog(t *testing.T, channel string, handler http.HandlerFunc) *httptest.Server {
+	return transportCatalogServer(t, channel, handler, false)
+}
+
+func transportCatalogServer(t *testing.T, channel string, handler http.HandlerFunc, trustedTLS bool) *httptest.Server {
+	t.Helper()
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer access-"+channel {
+			t.Errorf("request to %s had wrong upstream identity", r.URL.Path)
+		}
+		if channel == codexupstream.ChannelCodex && r.Header.Get("ChatGPT-Account-Id") != "fixture-account-codex" {
+			t.Errorf("incorrect selected upstream workspace on %s", r.URL.Path)
+		}
+		if channel == codexupstream.ChannelChatGPT && r.Header.Get("ChatGPT-Account-Id") != "" {
+			t.Errorf("public plan request used a Codex account header")
+		}
+		switch r.URL.Path {
+		case "/accounts":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"accounts":[{"id":"fixture-account-codex","name":"Fixture account","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}`)
+		case "/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"models":[{"slug":"%s","display_name":"Fixture","visibility":"list","shell_type":"unified_exec","base_instructions":"Fixture instructions","supported_reasoning_levels":[],"experimental_supported_tools":[],"support_verbosity":false,"priority":0,"truncation_policy":{"mode":"tokens","limit":10000}}]}`, transportModel)
+		case "/responses":
+			handler(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	var upstream *httptest.Server
+	if trustedTLS {
+		upstream = httptest.NewTLSServer(dispatch)
+	} else {
+		upstream = httptest.NewServer(dispatch)
+	}
+	t.Cleanup(upstream.Close)
+	return upstream
+}
+
+func TestGatewaySSEUpstreamTLSRequiresTrustedCertificate(t *testing.T) {
+	upstream := transportCatalogServer(t, "chatgpt", func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || !r.TLS.HandshakeComplete || r.ProtoMajor != 1 || r.ProtoMinor != 1 {
+			t.Errorf("expected TLS HTTP/1.1, got %s %+v", r.Proto, r.TLS)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", transportTerminal)
+	}, true)
+	adapter := transportAdapter(t, "chatgpt", upstream.URL, upstream.Client())
+	f := newTransportFixture(t, adapter)
+	_, token := f.workspace("tls", f.grant(adapter))
+	if resp, body := f.sse(token, transportInput); resp.StatusCode != 200 || !strings.Contains(body, "response.completed") {
+		t.Fatalf("trusted SSE response: %d %s", resp.StatusCode, body)
+	}
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialResponsesHTTP(t.Context(), &http.Client{}, target)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	var verificationError *tls.CertificateVerificationError
+	if !errors.As(err, &verificationError) {
+		t.Fatalf("untrusted SSE certificate: %v", err)
+	}
+}
+
+func transportHeaders(token string) http.Header {
+	return http.Header{
+		"Authorization":    {"Bearer " + token},
+		gatewayRunHeader:   {"test-run"},
+		"Thread-Id":        {"test-thread"},
+		turnMetadataHeader: {`{"thread_id":"test-thread","turn_id":"test-turn"}`},
+	}
+}
+
+func (f *transportFixture) sse(token, input string) (*http.Response, string) {
+	f.t.Helper()
+	body := strings.NewReader(fmt.Sprintf(`{"model":"%s","store":false,"stream":true,"input":%s}`, transportModel, input))
+	req, err := http.NewRequestWithContext(f.t.Context(), http.MethodPost, f.server.URL+GatewayPath+"/responses", body)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	req.Header = transportHeaders(token)
+	resp, err := f.server.Client().Do(req)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	output, err := io.ReadAll(resp.Body)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return resp, string(output)
+}
+
+func (f *transportFixture) ws(ctx context.Context, token string) (*websocket.Conn, *http.Response, error) {
+	return websocket.Dial(ctx, f.server.URL+GatewayPath+"/responses", &websocket.DialOptions{
+		HTTPClient: f.server.Client(), HTTPHeader: transportHeaders(token),
+	})
+}
+
+func transportGenerate(callResult string) []byte {
+	return fmt.Appendf(nil, `{"type":"response.create","model":"%s","stream":true,"store":false,"input":%s}`, transportModel, callResult)
+}
+
+const transportInput = `[{"role":"user","type":"message","content":"fixture input"}]`
+const transportOrphan = `[{"type":"function_call_output","call_id":"call_from_a","output":"old tool result"}]`
+const transportTerminal = `{"type":"response.completed","response":{"id":"resp_fixture","usage":{"input_tokens":11,"output_tokens":9}}}`
+
+func TestGatewayUnknownSubmissionSurvivesRestartAndSSEFallback(t *testing.T) {
+	for _, channel := range []string{codexupstream.ChannelCodex, codexupstream.ChannelChatGPT} {
+		t.Run(channel, func(t *testing.T) {
+			var written atomic.Int32
+			upstream := transportCatalog(t, channel, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					written.Add(1)
+					t.Error("automatic fallback reached the upstream after a possibly accepted generation")
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					t.Errorf("accept: %v", err)
+					return
+				}
+				defer conn.CloseNow()
+				if _, _, err := conn.Read(r.Context()); err == nil {
+					written.Add(1)
+				}
+			})
+			adapter := transportAdapter(t, channel, upstream.URL, upstream.Client())
+			f := newTransportFixture(t, adapter)
+			record := f.grant(adapter)
+			w, token := f.workspace("restart", record)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			conn, resp, err := f.ws(ctx, token)
+			if err != nil {
+				t.Fatalf("upgrade: %v %+v", err, resp)
+			}
+			if err := conn.Write(ctx, websocket.MessageText, transportGenerate(transportInput)); err != nil {
+				t.Fatal(err)
+			}
+			_, frame, err := conn.Read(ctx)
+			_ = conn.CloseNow()
+			if err != nil || !strings.Contains(string(frame), "submission_outcome_unknown") || written.Load() != 1 {
+				t.Fatalf("expected unknown outcome after one write: %q %v count=%d", frame, err, written.Load())
+			}
+			if retry, body := f.sse(token, transportInput); retry.StatusCode != 409 || !strings.Contains(body, "submission_outcome_unknown") {
+				t.Fatalf("retry response: %d %s", retry.StatusCode, body)
+			}
+
+			f.service.Close()
+			afterCrash := newTransportFixtureWithDB(t, f.db, f.service.key, adapter)
+			previous, err := f.db.WorkspaceCredential(t.Context(), w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := afterCrash.service.workspaceState(w.ID)
+			if err := afterCrash.service.confirmInstallation(t.Context(), state, state.verification, previous); err != nil {
+				t.Fatal(err)
+			}
+			if retry, body := afterCrash.sse(token, transportInput); retry.StatusCode != 409 || !strings.Contains(body, "submission_outcome_unknown") || written.Load() != 1 {
+				t.Fatalf("retry after restart: %d %s writes=%d", retry.StatusCode, body, written.Load())
+			}
+		})
+	}
+}
+
+type fixtureTrip func(r *http.Request) (*http.Response, error)
+
+func (f fixtureTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGatewayRebindPreventsLateHandshakeBothDirections(t *testing.T) {
+	for _, pair := range [][2]string{{"codex", "chatgpt"}, {"chatgpt", "codex"}} {
+		for _, stage := range []string{"before-dial", "after-upstream-101"} {
+			t.Run(pair[0]+"-to-"+pair[1]+"/"+stage, func(t *testing.T) {
+				paused := make(chan struct{})
+				release := make(chan struct{})
+				var pause atomic.Bool
+				pause.Store(true)
+				var oldGenerations, newGenerations, oldUpgrades atomic.Int32
+				old := transportCatalog(t, pair[0], func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodPost {
+						body, _ := io.ReadAll(r.Body)
+						if strings.Contains(string(body), "old tool result") {
+							t.Error("orphan tool result reached A")
+						}
+						oldGenerations.Add(1)
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprintf(w, "data: %s\n\n", transportTerminal)
+						return
+					}
+					oldUpgrades.Add(1)
+					conn, err := websocket.Accept(w, r, nil)
+					if err != nil {
+						return
+					}
+					defer conn.CloseNow()
+					if _, _, err := conn.Read(r.Context()); err == nil {
+						oldGenerations.Add(1)
+						t.Error("a late W1 handshake reached generation")
+					}
+				})
+				original := old.Client().Transport
+				oldClient := &http.Client{Transport: fixtureTrip(func(r *http.Request) (*http.Response, error) {
+					if stage == "before-dial" && r.URL.Path == "/responses" && r.Method == http.MethodGet && pause.Swap(false) {
+						close(paused)
+						select {
+						case <-release:
+						case <-t.Context().Done():
+						}
+						if r.Context().Err() != nil {
+							return nil, r.Context().Err()
+						}
+					}
+					response, err := original.RoundTrip(r)
+					if stage == "after-upstream-101" && err == nil && response.StatusCode == 101 && pause.Swap(false) {
+						close(paused)
+						select {
+						case <-release:
+						case <-t.Context().Done():
+						}
+					}
+					return response, err
+				})}
+				newUpstream := transportCatalog(t, pair[1], func(w http.ResponseWriter, r *http.Request) {
+					newGenerations.Add(1)
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", transportTerminal)
+				})
+				adapterA := transportAdapter(t, pair[0], old.URL, oldClient)
+				adapterB := transportAdapter(t, pair[1], newUpstream.URL, newUpstream.Client())
+				f := newTransportFixture(t, adapterA, adapterB)
+				a := f.grant(adapterA)
+				w1, token1 := f.workspace("one", a)
+				w2, token2 := f.workspace("two", a)
+				b := f.grant(adapterB)
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				var lateStatus atomic.Int32
+				closed := make(chan struct{})
+				go func() {
+					defer close(closed)
+					conn, resp, err := f.ws(ctx, token1)
+					if resp != nil {
+						lateStatus.Store(int32(resp.StatusCode))
+					}
+					if err == nil {
+						_ = conn.CloseNow()
+					}
+				}()
+				select {
+				case <-paused:
+				case <-ctx.Done():
+					t.Fatal("handshake did not reach the pause point")
+				}
+				binding, err := f.service.SetBinding(ctx, w1.ID, b.ID, 1)
+				close(release)
+				if err != nil || binding.BindingRevision != 2 {
+					t.Fatalf("rebind: %v, %v", binding, err)
+				}
+				select {
+				case <-closed:
+				case <-ctx.Done():
+					t.Fatal("late connection did not close")
+				}
+				if lateStatus.Load() != 401 {
+					t.Fatalf("stale upstream handshake acknowledged downstream: HTTP %d", lateStatus.Load())
+				}
+				docker, err := f.db.Container(t.Context(), w1.ID, w1.Generation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tokenB := f.install(w1, docker.ID, b)
+				if response, body := f.sse(tokenB, transportOrphan); response.StatusCode != 409 || !strings.Contains(body, "foreign_response_context") {
+					t.Fatalf("cross-binding call accepted: %d %s", response.StatusCode, body)
+				}
+				if response, body := f.sse(tokenB, transportInput); response.StatusCode != 200 || !strings.Contains(body, "response.completed") {
+					t.Fatalf("W1 bound to B: %d %s", response.StatusCode, body)
+				}
+				if response, body := f.sse(token2, transportInput); response.StatusCode != 200 || !strings.Contains(body, "response.completed") {
+					t.Fatalf("W2 using A: %d %s", response.StatusCode, body)
+				}
+				if response, _ := f.sse(token1, transportInput); response.StatusCode != 401 {
+					t.Fatalf("old W1 credential survived rebind: %d", response.StatusCode)
+				}
+				wantUpgrades := int32(0)
+				if stage == "after-upstream-101" {
+					wantUpgrades = 1
+				}
+				if oldUpgrades.Load() != wantUpgrades {
+					t.Fatalf("obsolete upstream upgrades=%d, want %d", oldUpgrades.Load(), wantUpgrades)
+				}
+				if oldGenerations.Load() != 1 || newGenerations.Load() != 1 {
+					t.Fatalf("generation counts after rebind A=%d B=%d workspace=%s", oldGenerations.Load(), newGenerations.Load(), w2.ID)
+				}
+			})
+		}
+	}
+}
+
+func TestGatewayLimitPreservesRetryAndRedactsUpstreamCredential(t *testing.T) {
+	upstream := transportCatalog(t, "chatgpt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "60")
+		w.Header().Set("X-Request-Id", "req_fixture")
+		w.WriteHeader(429)
+		_, _ = io.WriteString(w, `{"detail":{"code":"subscription_sharing_usage_limit_exceeded","message":"credential access-chatgpt"}}`)
+	})
+	adapter := transportAdapter(t, "chatgpt", upstream.URL, upstream.Client())
+	f := newTransportFixture(t, adapter)
+	_, token := f.workspace("limited", f.grant(adapter))
+	resp, body := f.sse(token, transportInput)
+	if resp.StatusCode != 429 || resp.Header.Get("Retry-After") != "60" || resp.Header.Get("X-Request-Id") != "req_fixture" ||
+		strings.Contains(body, "access-chatgpt") || !strings.Contains(body, "subscription_sharing_usage_limit_exceeded") {
+		t.Fatalf("misclassified 429, status=%d headers=%v body=%s", resp.StatusCode, resp.Header, body)
+	}
+}
+
+func TestGatewaySSEFrameBoundaries(t *testing.T) {
+	wire := "event: response.completed\r\ndata: {\"response\":\r\ndata: {\"id\": \"resp_fixture\"}}\r\n\r\n"
+	var progress responseProgress
+	err := consumeSSE(bufioScanner(wire), func([]byte) {}, func(event sseEvent) error {
+		progress.observe(event.data, event.kind)
+		return nil
+	}, func() bool { return progress.terminal })
+	if err != nil || progress.id != "resp_fixture" || progress.kind != "response.completed" {
+		t.Fatalf("multi-line event was not read: %+v %v", progress, err)
+	}
+	partial := strings.TrimSuffix(wire, "\r\n")
+	progress = responseProgress{}
+	err = consumeSSE(bufioScanner(partial), func([]byte) {}, func(event sseEvent) error {
+		progress.observe(event.data, event.kind)
+		return nil
+	}, func() bool { return progress.terminal })
+	if !errors.Is(err, io.ErrUnexpectedEOF) || progress.terminal {
+		t.Fatalf("unfinished SSE event accepted: %+v %v", progress, err)
+	}
+}
+
+func bufioScanner(body string) *bufio.Scanner { return bufio.NewScanner(strings.NewReader(body)) }
+
+type droppedTerminalWriter struct {
+	http.ResponseWriter
+	dropped *atomic.Bool
+}
+
+func (w droppedTerminalWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w droppedTerminalWriter) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), "response.completed") {
+		w.dropped.Store(true)
+		return len(data), nil
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func TestGatewayClientCannotReplayAfterLosingTerminal(t *testing.T) {
+	var generations atomic.Int32
+	upstream := transportCatalog(t, "chatgpt", func(w http.ResponseWriter, r *http.Request) {
+		generations.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.created","response":{"id":"resp_fixture"}}`+"\n\n")
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", transportTerminal)
+	})
+	adapter := transportAdapter(t, "chatgpt", upstream.URL, upstream.Client())
+	f := newTransportFixture(t, adapter)
+	_, token := f.workspace("loss", f.grant(adapter))
+	var dropped atomic.Bool
+	handler := f.service.GatewayHandler()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(droppedTerminalWriter{ResponseWriter: w, dropped: &dropped}, r)
+	}))
+	defer server.Close()
+	f.server = server
+	resp, body := f.sse(token, transportInput)
+	if resp.StatusCode != 200 || !strings.Contains(body, "response.created") || strings.Contains(body, "response.completed") || !dropped.Load() {
+		t.Fatalf("terminal loss fault didn't exercise downlink: status=%d body=%s dropped=%v", resp.StatusCode, body, dropped.Load())
+	}
+	resp, body = f.sse(token, transportInput)
+	if resp.StatusCode != 409 || !strings.Contains(body, "submission_outcome_unknown") || generations.Load() != 1 {
+		t.Fatalf("retry after dropped terminal: status=%d body=%s generations=%d", resp.StatusCode, body, generations.Load())
+	}
+}
+
+type observedWriteConn struct {
+	net.Conn
+	write func([]byte) (int, error)
+}
+
+func (c observedWriteConn) Write(data []byte) (int, error) { return c.write(data) }
+
+type responseResult struct {
+	response *http.Response
+	err      error
+}
+
+func TestGatewayRebindCancelsOldSSEAndRejectsOldToolResult(t *testing.T) {
+	for _, pair := range [][2]string{{"codex", "chatgpt"}, {"chatgpt", "codex"}} {
+		t.Run(pair[0]+"-to-"+pair[1], func(t *testing.T) {
+			var acceptedA, acceptedB atomic.Int32
+			started := make(chan struct{})
+			canceled := make(chan struct{})
+			beforeWrite := make(chan struct{})
+			allowWrite := make(chan struct{})
+			release := make(chan struct{})
+			defer close(release)
+			old := transportCatalog(t, pair[0], func(w http.ResponseWriter, r *http.Request) {
+				acceptedA.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				raw, _ := io.ReadAll(r.Body)
+				if strings.Contains(string(raw), "stream in flight") {
+					_, _ = io.WriteString(w, `data: {"type":"response.created","response":{"id":"resp_in_flight"}}`+"\n\n")
+					w.(http.Flusher).Flush()
+					close(started)
+					select {
+					case <-r.Context().Done():
+						close(canceled)
+					case <-release:
+					}
+					return
+				}
+				_, _ = io.WriteString(w, `data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_from_a","name":"test","arguments":"{}"}}`+"\n\n")
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", transportTerminal)
+			})
+			next := transportCatalog(t, pair[1], func(w http.ResponseWriter, r *http.Request) {
+				acceptedB.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", transportTerminal)
+			})
+			oldTransport := old.Client().Transport.(*http.Transport).Clone()
+			var dialer net.Dialer
+			oldTransport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				conn, err := dialer.DialContext(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				return observedWriteConn{Conn: conn, write: func(data []byte) (int, error) {
+					if !strings.Contains(string(data), "stream in flight") {
+						return conn.Write(data)
+					}
+					close(beforeWrite)
+					select {
+					case <-allowWrite:
+					case <-t.Context().Done():
+						return 0, t.Context().Err()
+					}
+					n, err := conn.Write(data)
+					if err == nil {
+						select {
+						case <-started:
+						case <-t.Context().Done():
+							return n, t.Context().Err()
+						}
+					}
+					return n, err
+				}}, nil
+			}
+			oldClient := &http.Client{Transport: oldTransport}
+			adapterA := transportAdapter(t, pair[0], old.URL, oldClient)
+			adapterB := transportAdapter(t, pair[1], next.URL, next.Client())
+			f := newTransportFixture(t, adapterA, adapterB)
+			a := f.grant(adapterA)
+			w1, token1 := f.workspace("one", a)
+			_, token2 := f.workspace("two", a)
+			b := f.grant(adapterB)
+			if resp, body := f.sse(token1, transportInput); resp.StatusCode != 200 ||
+				!strings.Contains(body, "call_from_a") || !strings.Contains(body, "response.completed") {
+				t.Fatalf("old tool fixture: %s %s", resp.Status, body)
+			}
+
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			streaming := strings.NewReader(fmt.Sprintf(`{"model":"%s","input":[{"role":"user","type":"message","content":"stream in flight"}]}`, transportModel))
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, f.server.URL+GatewayPath+"/responses", streaming)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header = transportHeaders(token1)
+			request.Header.Set(turnMetadataHeader, `{"thread_id":"test-thread","turn_id":"in-flight-turn"}`)
+			inflight := make(chan responseResult, 1)
+			go func() {
+				response, err := f.server.Client().Do(request)
+				inflight <- responseResult{response: response, err: err}
+			}()
+			select {
+			case <-beforeWrite:
+			case <-ctx.Done():
+				t.Fatal("request did not reach the write gate")
+			}
+			if state := f.service.workspaceState(w1.ID); state.fence.TryLock() {
+				state.fence.Unlock()
+				close(allowWrite)
+				t.Fatal("the write boundary did not hold the same fence as rebind")
+			}
+			switched := make(chan error, 1)
+			go func() {
+				binding, err := f.service.SetBinding(ctx, w1.ID, b.ID, 1)
+				if err == nil && binding.BindingRevision != 2 {
+					err = fmt.Errorf("unexpected revision after switch: %d", binding.BindingRevision)
+				}
+				switched <- err
+			}()
+			close(allowWrite)
+			select {
+			case err := <-switched:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("rebind did not commit after the admitted write")
+			}
+			select {
+			case <-canceled:
+			case <-ctx.Done():
+				t.Fatal("old upstream SSE was not canceled")
+			}
+			stream := <-inflight
+			if stream.response != nil {
+				body, _ := io.ReadAll(stream.response.Body)
+				_ = stream.response.Body.Close()
+				if strings.Contains(string(body), "response.completed") {
+					t.Fatalf("late SSE terminal crossed binding revision: %s", body)
+				}
+			}
+			instance, err := f.db.Container(ctx, w1.ID, w1.Generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokenB := f.install(w1, instance.ID, b)
+			if response, body := f.sse(tokenB, transportOrphan); response.StatusCode != 409 || !strings.Contains(body, "foreign_response_context") {
+				t.Fatalf("accepted old A call_id on B: %d %s", response.StatusCode, body)
+			}
+			if response, _ := f.sse(token1, transportOrphan); response.StatusCode != 401 {
+				t.Fatalf("old W1 credential accepted: %d", response.StatusCode)
+			}
+			if response, _ := f.sse(token2, transportInput); response.StatusCode != 200 {
+				t.Fatalf("W2 binding changed: %d", response.StatusCode)
+			}
+			if acceptedA.Load() != 3 || acceptedB.Load() != 0 {
+				t.Fatalf("expected three legitimate calls only to A, got A=%d B=%d", acceptedA.Load(), acceptedB.Load())
+			}
+		})
+	}
+}
+
+func TestGatewayInterruptHonorsChannelCapability(t *testing.T) {
+	for _, channel := range []string{"codex", "chatgpt"} {
+		t.Run(channel, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			var interrupts atomic.Int32
+			upstream := transportCatalog(t, channel, func(w http.ResponseWriter, r *http.Request) {
+				socket, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer socket.CloseNow()
+				if _, _, err := socket.Read(ctx); err != nil {
+					return
+				}
+				_ = socket.Write(ctx, websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"resp_interrupted"}}`))
+				if _, request, err := socket.Read(ctx); err == nil {
+					if !strings.Contains(string(request), `"response_id":"resp_interrupted"`) {
+						t.Errorf("interrupt didn't refer to actual response: %s", request)
+					}
+					interrupts.Add(1)
+					_ = socket.Write(ctx, websocket.MessageText, []byte(`{"type":"response.interrupt.accepted","response_id":"resp_interrupted"}`))
+					_ = socket.Write(ctx, websocket.MessageText, []byte(`{"type":"response.incomplete","response":{"id":"resp_interrupted","incomplete_details":{"reason":"interrupted"}}}`))
+				}
+			})
+			adapter := transportAdapter(t, channel, upstream.URL, upstream.Client())
+			f := newTransportFixture(t, adapter)
+			_, token := f.workspace("interrupt", f.grant(adapter))
+			socket, _, err := f.ws(ctx, token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer socket.CloseNow()
+			if err := socket.Write(ctx, websocket.MessageText, transportGenerate(transportInput)); err != nil {
+				t.Fatal(err)
+			}
+			_, created, err := socket.Read(ctx)
+			if err != nil || !strings.Contains(string(created), "response.created") {
+				t.Fatalf("wait for response that can be interrupted: %q %v", created, err)
+			}
+			if err := socket.Write(ctx, websocket.MessageText, []byte(`{"type":"response.interrupt","response_id":"resp_interrupted"}`)); err != nil {
+				t.Fatal(err)
+			}
+			_, acknowledgement, err := socket.Read(ctx)
+			if channel == "chatgpt" {
+				if err != nil || !strings.Contains(string(acknowledgement), "interruption_outcome_unknown") || interrupts.Load() != 0 {
+					t.Fatalf("unsupported interrupt result: %q %v writes=%d", acknowledgement, err, interrupts.Load())
+				}
+				return
+			}
+			if err != nil || !strings.Contains(string(acknowledgement), "response.interrupt.accepted") {
+				t.Fatalf("interrupt confirmation: %q %v", acknowledgement, err)
+			}
+			_, terminal, err := socket.Read(ctx)
+			if err != nil || !strings.Contains(string(terminal), "response.incomplete") || interrupts.Load() != 1 {
+				t.Fatalf("interrupt terminal: %q %v writes=%d", terminal, err, interrupts.Load())
+			}
+		})
+	}
+}
+
+func TestGatewayRebindFencesOldSocketToolResult(t *testing.T) {
+	for _, pair := range [][2]string{{"codex", "chatgpt"}, {"chatgpt", "codex"}} {
+		t.Run(pair[0]+"-to-"+pair[1], func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			var opened, acceptedOnW1, acceptedOnW2 atomic.Int32
+			done := make(chan struct{}, 2)
+			old := transportCatalog(t, pair[0], func(w http.ResponseWriter, r *http.Request) {
+				index := opened.Add(1)
+				socket, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer func() { done <- struct{}{} }()
+				defer socket.CloseNow()
+				if _, _, err := socket.Read(ctx); err != nil {
+					return
+				}
+				_ = socket.Write(ctx, websocket.MessageText, []byte(`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_from_a","name":"test","arguments":"{}"}}`))
+				_ = socket.Write(ctx, websocket.MessageText, []byte(transportTerminal))
+				if _, request, err := socket.Read(ctx); err == nil && strings.Contains(string(request), "old tool result") {
+					if index == 1 {
+						acceptedOnW1.Add(1)
+					} else {
+						acceptedOnW2.Add(1)
+					}
+					_ = socket.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_continued"}}`))
+				}
+			})
+			next := transportCatalog(t, pair[1], func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("old WS tool result reached B")
+				w.WriteHeader(500)
+			})
+			adapterA := transportAdapter(t, pair[0], old.URL, old.Client())
+			adapterB := transportAdapter(t, pair[1], next.URL, next.Client())
+			f := newTransportFixture(t, adapterA, adapterB)
+			a := f.grant(adapterA)
+			w1, token1 := f.workspace("one", a)
+			_, token2 := f.workspace("two", a)
+			b := f.grant(adapterB)
+			sockets := make([]*websocket.Conn, 0, 2)
+			for _, token := range []string{token1, token2} {
+				socket, _, err := f.ws(ctx, token)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer socket.CloseNow()
+				sockets = append(sockets, socket)
+				if err := socket.Write(ctx, websocket.MessageText, transportGenerate(transportInput)); err != nil {
+					t.Fatal(err)
+				}
+				if _, tool, err := socket.Read(ctx); err != nil || !strings.Contains(string(tool), "call_from_a") {
+					t.Fatalf("initial tool call: %s %v", tool, err)
+				}
+				if _, terminal, err := socket.Read(ctx); err != nil || !strings.Contains(string(terminal), "response.completed") {
+					t.Fatalf("initial terminal: %s %v", terminal, err)
+				}
+			}
+			if _, err := f.service.SetBinding(ctx, w1.ID, b.ID, 1); err != nil {
+				t.Fatal(err)
+			}
+			_ = sockets[0].Write(ctx, websocket.MessageText, transportGenerate(transportOrphan))
+			if err := sockets[1].Write(ctx, websocket.MessageText, transportGenerate(transportOrphan)); err != nil {
+				t.Fatal(err)
+			}
+			if _, terminal, err := sockets[1].Read(ctx); err != nil || !strings.Contains(string(terminal), "resp_continued") {
+				t.Fatalf("W2 should continue on A: %s %v", terminal, err)
+			}
+			for range 2 {
+				select {
+				case <-done:
+				case <-ctx.Done():
+					t.Fatal("old upstream connections did not stop")
+				}
+			}
+			if acceptedOnW1.Load() != 0 || acceptedOnW2.Load() != 1 {
+				t.Fatalf("actual continuation counts W1=%d W2=%d", acceptedOnW1.Load(), acceptedOnW2.Load())
+			}
+		})
+	}
+}
+
+func TestGatewayRedactsCredentialFromStreamingEvents(t *testing.T) {
+	const delta = `{"type":"response.output_text.delta","delta":"credential access-chatgpt"}`
+	upstream := transportCatalog(t, "chatgpt", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "event: response.output_text.delta\ndata: %s\n\ndata: %s\n\n", delta, transportTerminal)
+			return
+		}
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept fixture WebSocket: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		if _, _, err := conn.Read(r.Context()); err != nil {
+			t.Errorf("read fixture generation: %v", err)
+			return
+		}
+		for _, event := range []string{delta, transportTerminal} {
+			if err := conn.Write(r.Context(), websocket.MessageText, []byte(event)); err != nil {
+				t.Errorf("write fixture event: %v", err)
+				return
+			}
+		}
+	})
+	adapter := transportAdapter(t, "chatgpt", upstream.URL, upstream.Client())
+	f := newTransportFixture(t, adapter)
+	grant := f.grant(adapter)
+	t.Run("sse", func(t *testing.T) {
+		_, token := f.workspace("redaction-sse", grant)
+		response, output := f.sse(token, transportInput)
+		if response.StatusCode != http.StatusOK || strings.Contains(output, "access-chatgpt") ||
+			!strings.Contains(output, "event: response.output_text.delta\n") || !strings.Contains(output, "credential [redacted]") ||
+			!strings.Contains(output, transportTerminal) {
+			t.Fatal("SSE did not preserve the event and terminal while redacting the upstream credential")
+		}
+	})
+	t.Run("ws", func(t *testing.T) {
+		_, token := f.workspace("redaction-ws", grant)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		conn, _, err := f.ws(ctx, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.CloseNow()
+		if err := conn.Write(ctx, websocket.MessageText, transportGenerate(transportInput)); err != nil {
+			t.Fatal(err)
+		}
+		_, redacted, err := conn.Read(ctx)
+		if err != nil || strings.Contains(string(redacted), "access-chatgpt") || !strings.Contains(string(redacted), "credential [redacted]") {
+			t.Fatal("WebSocket forwarded an unredacted streaming event")
+		}
+		_, terminal, err := conn.Read(ctx)
+		if err != nil || string(terminal) != transportTerminal {
+			t.Fatalf("WebSocket terminal was not preserved: %v", err)
+		}
+	})
+}
+
+func TestGatewayWebSocketContinuationStaysInItsThread(t *testing.T) {
+	var submitted atomic.Int32
+	upstream := transportCatalog(t, "codex", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept fixture WebSocket: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			if _, _, err := conn.Read(r.Context()); err != nil {
+				return
+			}
+			submitted.Add(1)
+			if err := conn.Write(r.Context(), websocket.MessageText, []byte(transportTerminal)); err != nil {
+				return
+			}
+		}
+	})
+	adapter := transportAdapter(t, "codex", upstream.URL, upstream.Client())
+	f := newTransportFixture(t, adapter)
+	_, token := f.workspace("thread-continuation", f.grant(adapter))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	headers := transportHeaders(token)
+	headers.Del("Thread-Id")
+	headers.Del(turnMetadataHeader)
+	conn, _, err := websocket.Dial(ctx, f.server.URL+GatewayPath+"/responses", &websocket.DialOptions{
+		HTTPClient: f.server.Client(), HTTPHeader: headers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	send := func(thread, previous string) []byte {
+		t.Helper()
+		request := fmt.Appendf(nil, `{"type":"response.create","model":"%s","stream":true,"store":false,"input":%s,"client_metadata":{"thread_id":%q},"previous_response_id":%q}`,
+			transportModel, transportInput, thread, previous)
+		if err := conn.Write(ctx, websocket.MessageText, request); err != nil {
+			t.Fatal(err)
+		}
+		_, result, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if first := send("thread-a", ""); string(first) != transportTerminal {
+		t.Fatalf("initial generation did not complete: %s", first)
+	}
+	if alternate := send("thread-b", "resp_fixture"); !strings.Contains(string(alternate), "previous_response_not_found") || submitted.Load() != 1 {
+		t.Fatalf("another thread continued the response, upstream submissions=%d", submitted.Load())
+	}
+}
+
+func TestGatewaySSEWithoutContentTypeRequiresResponsesFraming(t *testing.T) {
+	for _, tc := range []struct {
+		name, contentType, body string
+		want                    int
+	}{
+		{"responses-stream", "", ": keep-alive\r\n\r\n" +
+			"event: response.created\r\ndata: {\"response\":{\"id\":\"resp_fixture\"}}\r\n\r\n" +
+			"event: response.completed\r\ndata: " + transportTerminal + "\r\n\r\n", http.StatusOK},
+		{"json", "", `{"type":"response.completed"}`, http.StatusConflict},
+		{"html", "", "<html>not an event stream</html>", http.StatusConflict},
+		{"oversized-prefix", "", strings.Repeat(": keep-alive\n\n", 5000) + "data: " + transportTerminal + "\n\n", http.StatusConflict},
+		{"unrelated-event", "", "event: message\ndata: {\"type\":\"message\"}\n\n", http.StatusConflict},
+		{"explicit-non-sse-type", "application/json", "data: " + transportTerminal + "\n\n", http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := transportCatalog(t, "chatgpt", func(w http.ResponseWriter, _ *http.Request) {
+				if tc.contentType == "" {
+					w.Header()["Content-Type"] = nil
+				} else {
+					w.Header().Set("Content-Type", tc.contentType)
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, tc.body)
+			})
+			adapter := transportAdapter(t, "chatgpt", upstream.URL, upstream.Client())
+			f := newTransportFixture(t, adapter)
+			_, token := f.workspace(tc.name, f.grant(adapter))
+			response, body := f.sse(token, transportInput)
+			if response.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", response.StatusCode, tc.want)
+			}
+			if tc.want == http.StatusOK {
+				if response.Header.Get("Content-Type") != "text/event-stream" ||
+					!strings.Contains(body, ": keep-alive\n\n") ||
+					!strings.Contains(body, "event: response.created\ndata: ") ||
+					!strings.Contains(body, "event: response.completed\ndata: "+transportTerminal+"\n\n") {
+					t.Fatal("initial events were lost or the downstream content type was incorrect")
+				}
+			} else if !strings.Contains(body, "submission_outcome_unknown") {
+				t.Fatal("unrecognized response did not preserve the unknown submission outcome")
+			}
+		})
+	}
+}

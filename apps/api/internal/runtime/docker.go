@@ -110,16 +110,15 @@ func (d *Docker) owns(labels map[string]string, id string) bool {
 const (
 	workspaceMount  = "/workspace"
 	sshHostKeyMount = "/var/lib/cloudex-ssh"
-	homeMount       = "/home/coder"
 )
 
-func (d *Docker) volumeNames(s Spec) [3]string {
+func (d *Docker) volumeNames(s Spec) [2]string {
 	base := d.name(s.WorkspaceID)
 	project := base + "-data"
 	if s.ProjectVolumeRevision > 0 {
 		project += "-r" + strconv.Itoa(s.ProjectVolumeRevision)
 	}
-	return [3]string{project, base + "-ssh", base + "-home"}
+	return [2]string{project, base + "-ssh"}
 }
 
 // ManagedWorkspace identifies the Workspace that owns an exact Docker ID.
@@ -260,7 +259,17 @@ func (d *Docker) ensureVolume(ctx context.Context, name, id string) error {
 func (d *Docker) Ensure(ctx context.Context, s Spec) (_ Container, outErr error) {
 	defer d.classifyOutcome(&outErr)
 	current, e := d.Inspect(ctx, s)
-	if !errors.Is(e, ErrMissing) {
+	if e == nil {
+		if s.CreationOperationID == "" || current.CreatedByOperation(s.CreationOperationID) {
+			return current, nil
+		}
+		// A terminally failed operation can leave a candidate at the same
+		// generation number. Its initialized files belong to the earlier operation.
+		_, err := d.cli.ContainerRemove(ctx, current.ID, client.ContainerRemoveOptions{Force: true})
+		if err != nil && !errdefs.IsNotFound(err) {
+			return Container{}, err
+		}
+	} else if !errors.Is(e, ErrMissing) {
 		return current, e
 	}
 	if _, e := d.cli.ImageInspect(ctx, s.Image); errdefs.IsNotFound(e) {
@@ -272,6 +281,9 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (_ Container, outErr error)
 	names := d.volumeNames(s)
 	labels := d.labels(s.WorkspaceID)
 	labels[generationLabel] = strconv.Itoa(s.Generation)
+	if s.CreationOperationID != "" {
+		labels[CreationOperationLabel] = s.CreationOperationID
+	}
 	init := true
 	pids := int64(512)
 	cfg := &container.Config{Image: s.Image, User: "0:0", WorkingDir: "/workspace", Labels: labels,
@@ -280,13 +292,14 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (_ Container, outErr error)
 	host := &container.HostConfig{
 		Init: &init, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 		NetworkMode: container.NetworkMode(s.SSHNetwork),
-		// Only OpenSSH starts as root. Debian OpenSSH records PTY sessions through Linux audit.
+		Tmpfs:       map[string]string{gatewayMount: "noexec,nosuid,nodev,mode=0755,size=65536"},
+		// Debian OpenSSH records PTY sessions through Linux audit.
 		CapAdd:        []string{"CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID", "SYS_CHROOT", "KILL", "AUDIT_WRITE"},
 		Resources:     container.Resources{NanoCPUs: s.CPU * 1_000_000, Memory: s.Memory * 1024 * 1024, PidsLimit: &pids},
 		LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}},
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 	}
-	for i, target := range []string{workspaceMount, sshHostKeyMount, homeMount} {
+	for i, target := range []string{workspaceMount, sshHostKeyMount} {
 		name := names[i]
 		if err := d.ensureVolume(ctx, name, s.WorkspaceID); err != nil {
 			return Container{}, err
@@ -297,7 +310,11 @@ func (d *Docker) Ensure(ctx context.Context, s Spec) (_ Container, outErr error)
 	if e != nil && !errdefs.IsConflict(e) {
 		return Container{}, e
 	}
-	return d.Inspect(ctx, s)
+	current, e = d.Inspect(ctx, s)
+	if e == nil && s.CreationOperationID != "" && !current.CreatedByOperation(s.CreationOperationID) {
+		return Container{}, ErrOwnership
+	}
+	return current, e
 }
 
 func (d *Docker) Start(ctx context.Context, id string) (outErr error) {

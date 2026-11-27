@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Notice } from "./shared";
-import { change, idempotencyKey, mutationOutcomeUnknown, repositoryCredentialKey, workspaceState, wsPath, type Accepted, type Workspace } from "@/lib/api";
+import { change, idempotencyKey, mutationOutcomeUnknown, repositoryCredentialKey, workspaceState, wsPath,
+  type Accepted, type Workspace } from "@/lib/api";
+import { grantBindingQuery, grantsQuery } from "@/lib/grants";
 
 type Kind = "start" | "stop" | "rebuild" | "reset" | "delete";
 type LifecycleRequest = Readonly<{
@@ -29,6 +31,8 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
   const { t } = useT();
   const client = useQueryClient();
   const savingCredential = useIsMutating({ mutationKey: repositoryCredentialKey(workspace.id) }) > 0;
+  const bindingKey = grantBindingQuery(workspace.id).queryKey;
+  const savingGrant = useIsMutating({ mutationKey: bindingKey }) > 0;
   const [purge,setPurge] = useState(false);
   const mutation = useMutation({
     mutationFn: ({kind, body, key}: LifecycleRequest) =>
@@ -38,13 +42,15 @@ export function Lifecycle({workspace, busy, onQueued, destructive = false, start
       client.invalidateQueries({queryKey:["operations"]});
       client.invalidateQueries({queryKey:["workspace",workspace.id]});
       client.invalidateQueries({queryKey:["access",workspace.id]});
+      client.invalidateQueries({queryKey: bindingKey});
+      if (kind === "delete") client.invalidateQueries({queryKey: grantsQuery.queryKey});
       onQueued(response,kind);
     },
   });
   const state = workspaceState(workspace);
   const uncertainRequest = mutationOutcomeUnknown(mutation.error) ? mutation.variables : undefined;
   const disabled = busy || mutation.isPending || !!uncertainRequest;
-  const awaitingCredential = (kind: Kind) => savingCredential && (kind === "rebuild" || kind === "reset");
+  const awaitingCredential = (kind: Kind) => (savingGrant || savingCredential) && (kind === "rebuild" || kind === "reset");
   function queue(kind: Kind) {
     if (disabled || awaitingCredential(kind)) return;
     mutation.mutate({

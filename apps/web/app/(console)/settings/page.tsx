@@ -8,6 +8,7 @@ import { accountMutationKey, APIError, api, change, hostImageReady, hostListQuer
   settingsQuery, templatesQuery, workspaceImageDraft, publicKeyLines, type Session, type Settings } from "@/lib/api";
 import { hostName } from "@/lib/i18n";
 import { Loading, Notice, PageHeader, Status } from "@/components/shared";
+import { GrantSettings } from "@/components/grant-settings";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 
@@ -268,68 +269,12 @@ function SSHKeySettings() {
   </section>;
 }
 
-const initialCodexFilesQuery = {
-  queryKey: ["initial-codex-files"],
-  queryFn: ({ signal }: { signal: AbortSignal }) => api<InitialCodexFiles>("/settings/codex-files", { signal }),
-};
-type InitialCodexFiles = { agents_md: string; config_toml: string };
-
-function InitialCodexFileSettings() {
-  const { t } = useT();
-  const client = useQueryClient();
-  const q = useQuery(initialCodexFilesQuery);
-  const [draft, setDraft] = useState<Partial<InitialCodexFiles>>({});
-  const write = useMutation({
-    mutationFn: async (edits: Partial<InitialCodexFiles>) => {
-      // The PUT requires both files. Keep the current value of any file the user did not edit.
-      const current = edits.agents_md === undefined || edits.config_toml === undefined
-        ? await api<InitialCodexFiles>("/settings/codex-files") : undefined;
-      return change("/settings/codex-files", "PUT", { ...current, ...edits });
-    },
-    onSuccess: () => setDraft({}),
-    onSettled: () => client.invalidateQueries({ queryKey: initialCodexFilesQuery.queryKey }),
-  });
-  const stored = q.data;
-  const files = stored && { ...stored, ...draft };
-  const fields = [["agents_md", "AGENTS.md"], ["config_toml", "config.toml"]] as const;
-  const canSave = stored && files && q.isSuccess && !write.isPending &&
-    fields.some(([key]) => files[key] !== stored[key]);
-  return <section className="panel" id="codex-files" aria-labelledby="codex-files-heading">
-    <div className="section-head"><div><h2 id="codex-files-heading">{t("initialCodexFiles")}</h2>
-      <p>{t("initialCodexFilesHint")}</p></div></div>
-    {q.error && <Notice error={q.error} retry={() => q.refetch()}/>}
-    {q.isPending && <Loading label={t("loading")} rows={3}/>}
-    {files && <form className="form" onSubmit={e => { e.preventDefault(); if (canSave) write.mutate(draft); }}>
-      <FieldGroup className="halves">
-        {fields.map(([key, label]) => <Field key={key} data-disabled={write.isPending}>
-          <FieldLabel htmlFor={key}>{label}</FieldLabel>
-          <textarea id={key} className="field font-mono" rows={8} spellCheck={false} maxLength={32768}
-            disabled={write.isPending} value={files[key]} onChange={e => {
-              const value = e.target.value;
-              setDraft(previous => {
-                const next = { ...previous };
-                if (value === stored?.[key]) delete next[key];
-                else next[key] = value;
-                return next;
-              });
-              write.reset();
-            }}/>
-        </Field>)}
-      </FieldGroup>
-      {write.error && <Notice error={write.error}/>}
-      {write.isSuccess && <p className="confirm" role="status">{t("initialCodexFilesSaved")}</p>}
-      <div className="actions"><Button disabled={!canSave}>{write.isPending ? t("saving") : t("saveInitialCodexFiles")}</Button></div>
-    </form>}
-  </section>;
-}
-
 function SettingsIndex({ container }: { container: RefObject<HTMLDivElement | null> }) {
   const { t } = useT();
   const [sections, setSections] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => {
     const root = container.current;
     if (!root) return;
-    // Codex sections render only when their data allows, so the index follows what is on screen.
     const read = () => setSections(current => {
       const next = Array.from(root.querySelectorAll<HTMLElement>(":scope > section[id]"),
         section => ({ id: section.id, label: section.querySelector("h2")?.textContent ?? section.id }));
@@ -363,7 +308,7 @@ export default function SettingsPage() {
             <Loading label={t("loading")} rows={2}/>}
         </section>}
         <SSHKeySettings/>
-        <InitialCodexFileSettings/>
+        <GrantSettings/>
         {q.data && <AccessSettings settings={q.data} observedAt={q.dataUpdatedAt} unavailable={q.isError}/>}
       </div>
     </div>

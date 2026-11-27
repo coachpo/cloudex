@@ -61,11 +61,10 @@ export function RemoteAccess({query:q}:{query:UseQueryResult<WorkspaceAccess,Err
       </section>
       <div className="view-grid">
         <section className="panel">
-          <div className="section-head"><h2>{t("networkAndSignIn")}</h2></div>
+          <div className="section-head"><h2>{t("sshNetwork")}</h2></div>
           <p className="muted leading-relaxed">{t("sshHopsPublicKey")} {access.bind.startsWith("127.")?
             t("sshLoopback"):
             t("sshPrivateNetwork")}</p>
-          <p className="muted mt-3"><Translation id="headlessLoginHint" values={{ command: <code>codex login --device-auth</code> }}/></p>
         </section>
       </div>
     </div>

@@ -192,15 +192,6 @@ func (a *executor) dockerMutation(ctx context.Context, req request) (any, error)
 			return nil, runtime.GitCredentialWriteError{Err: err}
 		}
 		return nil, nil
-	case "write-initial-codex-files":
-		if req.Spec == nil || req.InitialCodexFiles == nil || req.ID == "" {
-			return nil, errors.New("Workspace and Codex configuration are required")
-		}
-		writer, ok := a.Engine.(runtime.InitialCodexFilesWriter)
-		if !ok {
-			return nil, errors.New("the Host Agent cannot apply Codex configuration")
-		}
-		return nil, writer.WriteInitialCodexFiles(ctx, *req.Spec, req.ID, *req.InitialCodexFiles)
 	case "ensure", "remove":
 		if req.Spec == nil {
 			return nil, errors.New("workspace specification required")

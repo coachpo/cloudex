@@ -3,18 +3,100 @@
 
 import ctypes
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 
 GIT_CREDENTIAL_FILE = Path("/etc/cloudex/git-credential.json")
+GATEWAY_DIR = Path("/run/cloudex")
+GATEWAY_FILE = GATEWAY_DIR / "gateway.json"
+BOOT_MARKER_FILE = GATEWAY_DIR / "boot"
+WORKSPACE_UID = 10001
+
+
+def gateway_mount():
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        mount, filesystem = line.split(" - ", 1)
+        if mount.split()[4] == str(GATEWAY_DIR) and filesystem.split()[0] == "tmpfs":
+            return
+    raise OSError("workspace gateway requires its own tmpfs")
+
+
+def gateway_init():
+    gateway_mount()
+    try:
+        with BOOT_MARKER_FILE.open("x") as marker:
+            marker.write(secrets.token_hex(16))
+    except FileExistsError:
+        pass
+    return 0
+
+
+def gateway_credential():
+    try:
+        return json.loads(GATEWAY_FILE.read_text())
+    except FileNotFoundError:
+        return None
+
+
+def gateway_confirmation(marker, record):
+    response = dict(boot_marker=marker)
+    if record is not None:
+        response.update(sequence=record["sequence"], started_at=record["started_at"],
+                        origin=record["origin"], binding_revision=record["binding_revision"], grant_epoch=record["grant_epoch"],
+                        digest=hashlib.sha256(record["token"].encode("ascii")).hexdigest())
+    print(json.dumps(response))
+
+
+def gateway_state():
+    gateway_mount()
+    gateway_confirmation(BOOT_MARKER_FILE.read_text(), gateway_credential())
+    return 0
+
+
+def gateway_install():
+    gateway_mount()
+    # One line over Docker attach stdin. Docker doesn't persist the stream.
+    data = sys.stdin.buffer.readline(4097)
+    try:
+        if len(data) > 4096 or not data.endswith(b"\n"):
+            raise ValueError()
+        record = json.loads(data)
+        marker = BOOT_MARKER_FILE.read_text()
+        if marker != record["boot_marker"] or not re.fullmatch(r"[A-Za-z0-9_-]{43}", record["token"]):
+            raise ValueError()
+        with (GATEWAY_DIR / "install.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            current = gateway_credential()
+            if current is not None and current["sequence"] >= record["sequence"]:
+                if current != record:
+                    raise ValueError()
+            else:
+                with tempfile.NamedTemporaryFile(dir=GATEWAY_DIR, delete=False) as temporary:
+                    path = Path(temporary.name)
+                    try:
+                        temporary.write(data)
+                        temporary.flush()
+                        os.fchown(temporary.fileno(), 0, WORKSPACE_UID)
+                        os.fchmod(temporary.fileno(), 0o440)
+                        path.replace(GATEWAY_FILE)
+                    finally:
+                        path.unlink(missing_ok=True)
+        gateway_confirmation(marker, record)
+        return 0
+    except (KeyError, OSError, TypeError, ValueError):
+        print("Workspace gateway credential installation was rejected", file=sys.stderr)
+        return 1
 
 
 def git_credential(operation):
@@ -185,6 +267,12 @@ def main():
         return initialize(*args)
     if action == "git-credential":
         return git_credential(*args)
+    if action == "gateway-init":
+        return gateway_init()
+    if action == "gateway-state":
+        return gateway_state()
+    if action == "gateway-install":
+        return gateway_install()
     if action == "git":
         return git_snapshot(*args)
     if action == "terminal":

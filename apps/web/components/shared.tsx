@@ -48,12 +48,12 @@ export function Status({state, label}: {state: string; label?: string}) {
   return <span className="status" data-state={state}>{label ?? statusName(t, state)}</span>;
 }
 
-export function Notice({error, retry}: {error: Error; retry?: () => void}) {
+export function Notice({error, retry, announce = true}: {error: Error; retry?: () => void; announce?: boolean}) {
   const { locale, t } = useT();
   const detail = error instanceof APIError
     ? error.message === noResponseMessage ? t("requestNoResponse") : localizeProblem(locale, error.code, error.message)
     : error.message;
-  return <div className="notice" role="alert">
+  return <div className="notice" role={announce ? "alert" : undefined}>
     <CircleAlert aria-hidden="true" strokeWidth={2}/>
     <p className="notice-body"><b>{t("requestFailed")}</b>{" "}{detail}</p>
     {retry && <Button type="button" variant="outline" size="xs" onClick={retry}>{t("retry")}</Button>}
@@ -98,14 +98,14 @@ export function Facts({items}: {items: [string, ReactNode][]}) {
   return <dl className="fact-list">{items.map(([label,value]) => <Fragment key={label}><dt>{label}</dt><dd>{value ?? "—"}</dd></Fragment>)}</dl>;
 }
 
-export function Meter({ value, total, label, warnWhenFull = false }: {
-  value: number; total: number; label: string; warnWhenFull?: boolean;
+export function Meter({ value, total, label, warnWhenFull = false, level }: {
+  value: number; total: number; label: string; warnWhenFull?: boolean; level?: "low" | "critical";
 }) {
   if (total <= 0) return null;
   const current = Math.min(total, Math.max(0, value));
   const share = current / total;
   return <div className="meter" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={total} aria-valuenow={current}
-    data-level={warnWhenFull && share >= .85 ? "high" : undefined}>
+    data-level={level ?? (warnWhenFull && share >= .85 ? "high" : undefined)}>
     <span style={{ width: `${share * 100}%` }}/>
   </div>;
 }

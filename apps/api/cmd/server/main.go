@@ -152,6 +152,15 @@ func run(parent context.Context) error {
 		return e
 	}
 	controller := &control.Control{Store: db, Key: aead, SSH: ssh}
+	grantGateway, callback, callbackExited, e := startGrantGateway(ctx, db, aead, origin)
+	if e != nil {
+		return e
+	}
+	defer grantGateway.Close()
+	if callback != nil {
+		defer callback.Close()
+	}
+	controller.Gateway = grantGateway
 	agents, e := startAgentServices(ctx, db, instance, aead, controller.SyncConnectedHostSSHKeys)
 	if e != nil {
 		return e
@@ -173,7 +182,7 @@ func run(parent context.Context) error {
 	}
 	defer gateway.Close()
 	api := &httpapi.Server{Control: controller, Origin: origin, AgentCertificate: agents.caPEM,
-		DisconnectAgent: agents.Disconnect, SSHHosts: hosts}
+		DisconnectAgent: agents.Disconnect, SSHHosts: hosts, GrantGateway: grantGateway}
 	srv := &http.Server{Addr: env("CLOUDEX_ADDR", "127.0.0.1:3000"), Handler: api.Handler(proxy),
 		BaseContext:       func(_ net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
@@ -202,15 +211,23 @@ func run(parent context.Context) error {
 		if e != nil {
 			exit = fmt.Errorf("SSH Gateway: %w", e)
 		}
+	case e := <-callbackExited:
+		if !errors.Is(e, http.ErrServerClosed) {
+			exit = fmt.Errorf("OAuth callback listener: %w", e)
+		}
 	case e := <-agents.exited:
 		if !errors.Is(e, http.ErrServerClosed) {
 			exit = fmt.Errorf("Host Agent listener: %w", e)
 		}
 	}
+	grantGateway.Close()
 	cancel()
 	stop, end := context.WithTimeout(context.Background(), 10*time.Second)
 	defer end()
 	_ = srv.Shutdown(stop)
+	if callback != nil {
+		_ = callback.Shutdown(stop)
+	}
 	if workerExited != nil {
 		<-workerExited
 	}

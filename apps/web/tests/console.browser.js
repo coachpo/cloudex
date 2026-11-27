@@ -42,7 +42,8 @@ async page => {
     "/operations": operations,
     "/settings": { workspace_image: "workspace:saved", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" },
     "/settings/ssh-keys": { public_keys: [] },
-    "/settings/codex-files": { agents_md: "", config_toml: "" },
+    "/grants": { grants: [] },
+    "/workspaces/fixture/grant-binding": { workspace_id: workspace.id, grant_id: "", binding_revision: 0, readiness: "unbound" },
     "/templates": [{ id: "codex", name: "Codex", image: "workspace:saved", cpu_milli: 2000, memory_mb: 4096 }],
   };
   const check = (condition, message) => {
@@ -78,7 +79,7 @@ async page => {
     if (path === "/hosts/ssh/probe" && request.method() === "POST") {
       return route.fulfill({ json: { data: { host_key: "ssh-ed25519 sample", fingerprint: "SHA256:sample" } } });
     }
-    if ((path === "/settings/codex-files" || path === "/settings/ssh-keys") && request.method() === "PUT") {
+    if (path === "/settings/ssh-keys" && request.method() === "PUT") {
       data[path] = request.postDataJSON();
     }
     if (path === "/workspaces/fixture/access" && failAccess) {
@@ -225,18 +226,6 @@ async page => {
     await accountMismatch.waitFor({ state: "hidden" });
     check(await accountConfirmation.getAttribute("aria-invalid") === "false",
       "Correcting the account confirmation left the field invalid");
-
-    const agents = page.getByLabel("AGENTS.md", { exact: true });
-    const config = page.getByLabel("config.toml", { exact: true });
-    await agents.fill("Local edit");
-    await config.fill("temporary = true");
-    await config.fill("");
-    const concurrentConfig = 'model = "changed"\n';
-    data["/settings/codex-files"] = { agents_md: "", config_toml: concurrentConfig };
-    await page.getByRole("button", { name: "Save initial files" }).click();
-    await page.getByText("Initial files saved.", { exact: true }).waitFor();
-    check(data["/settings/codex-files"].agents_md === "Local edit", "Saving initial files dropped the edited file");
-    check(data["/settings/codex-files"].config_toml === concurrentConfig, "Saving initial files overwrote a concurrent edit");
 
     const keys = page.getByLabel("Authorized keys", { exact: true });
     await keys.fill("ssh-ed25519 fixture Saved");

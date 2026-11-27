@@ -1,6 +1,6 @@
 # Cloudex
 
-Cloudex 是自托管的多主机 AI Coding Workspace 平台。管理员选择 Docker Host 创建 Workspace，再通过 Codex Desktop、原生 SSH 或 Web Terminal 使用同一工作树。项目和 home 目录分别保存在持久卷中。
+Cloudex 是自托管的多主机 AI Coding Workspace 平台。管理员选择 Docker Host 创建 Workspace，再通过 Codex Desktop、原生 SSH 或 Web Terminal 使用同一工作树。可为每个 Workspace 绑定一份 Sign in with Codex 或 Sign in with ChatGPT 授权，通过控制面网关运行 Codex。工作树保存在 Workspace 卷中，容器及其 home 可随时丢弃。
 
 ## 项目现状
 
@@ -29,10 +29,11 @@ docker compose up -d --build
 2. 默认 Compose 通过本机 Agent 接入 Docker。要添加其他机器，可在 **Hosts → Add host** 选择 **SSH 直连**，也可注册由远程机器主动连接控制面的 Agent。见[加入远程 Host](docs/operations.md#加入远程-host)。
 3. 确认 **Hosts** 中目标 Host 在线。在 **New workspace** 选择 Host 和资源，创建空仓库或填写 HTTPS 仓库地址与分支。私有仓库可单独填写凭据。
 4. 在 **设置 → SSH 公钥** 添加客户端公钥，再按[连接步骤](docs/operations.md#通过-ssh-连接-workspace)验证两层主机密钥并打开 `/workspace/project`。也可以在 **Web terminal** 打开 Shell。
+5. 使用托管 Codex 时，先配置容器可访问的 HTTPS 网关，再在设置页添加授权并在 Workspace 设置中绑定。回环登录和容器连通条件见[配置 Codex 网关](docs/operations.md#codex-网关)。
 
 ## 文档
 
 - [架构与契约](ARCHITECTURE.md)涵盖模块边界、术语、接口和决策记录。
-- [运维](docs/operations.md)涵盖管理员账号、远程 Host 注册、调度、数据保留和恢复。
+- [运维](docs/operations.md)涵盖管理员账号、Codex 网关、远程 Host 注册、调度、数据保留和恢复。
 - [贡献指南](CONTRIBUTING.md)说明开发、文档、验证和提交约定。
 - [变更记录](CHANGELOG.md)按历史记录用户可见的变化。

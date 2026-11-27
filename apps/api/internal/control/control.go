@@ -31,6 +31,7 @@ type Control struct {
 	SSH             remote.Config
 	GatewayKey      ssh.PublicKey
 	GatewayKeyAlias string
+	Gateway         GatewayLifecycle
 }
 
 func (c *Control) EngineFor(hostID string) runtime.Engine {
@@ -143,6 +144,9 @@ func (c *Control) operation(ctx context.Context) bool {
 			err = c.Store.FinishOp(ctx, o, state, container, message)
 		}
 		if err == nil {
+			if e == nil && state == "running" && c.Gateway != nil {
+				logError(ctx, "prepare Workspace gateway credential", c.ReconcileGateway(ctx, w))
+			}
 			break
 		}
 		logError(ctx, "finish operation", err)
@@ -159,9 +163,10 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 	engine := c.EngineFor(w.HostID)
 	startRecorded := o.Type == "start" && o.Phase == startMayHaveRun
 	verifyStart := o.Type == "start" && (startRecorded || w.StartUnverified)
-	// A Start that fails before it is sent has changed nothing, and a failed
-	// Stop is left for reconciliation to observe.
-	reject := o.Type == "start" || o.Type == "stop"
+	replacing := o.Type == "rebuild" || o.Type == "reset"
+	// Preserve the observation until this operation may have touched Docker
+	// state, including a new replacement rejected by preflight.
+	reject := o.Type == "start" || o.Type == "stop" || (replacing && w.Observed != "rebuilding")
 	defer func() {
 		switch {
 		case err == nil:
@@ -173,6 +178,9 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 	}()
 	target := spec(w, o.Target)
 	target.SSHNetwork = c.SSH.Network
+	if o.Type == "create" || replacing {
+		target.CreationOperationID = o.ID
+	}
 	inspect := func() (runtime.Container, error) {
 		if o.Type == "start" {
 			return c.Inspect(ctx, w)
@@ -195,6 +203,10 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 		}
 		return "deleted", nil, nil
 	case "rebuild", "reset":
+		if e := c.Store.BeginReplacement(ctx, o); e != nil {
+			return "", nil, e
+		}
+		reject = false
 		if w.Generation > 0 {
 			if e := engine.Remove(ctx, spec(w, w.Generation)); e != nil {
 				return "", nil, e
@@ -268,12 +280,10 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 				err = errors.Join(err, fmt.Errorf("remove failed container candidate: %w", e))
 			}
 		}()
+		if !ci.CreatedByOperation(o.ID) {
+			return "", nil, fmt.Errorf("%w: candidate creation operation does not match. Use a Host Agent built from the same revision as the control plane", runtime.ErrOwnership)
+		}
 		if ci.State == "created" {
-			if o.Type == "create" {
-				if e = c.writeInitialCodexFiles(ctx, engine, target, ci.ID); e != nil {
-					return "", nil, e
-				}
-			}
 			if e = c.applyGitCredential(ctx, engine, target, ci.ID); e != nil {
 				return "", nil, e
 			}
@@ -370,6 +380,9 @@ func (c *Control) reconcile(ctx context.Context, schedule func(string, func())) 
 		schedule(hostID, func() {
 			for _, w := range batch {
 				logError(ctx, "update observed state", c.reconcileWorkspace(ctx, w))
+				if c.Gateway != nil {
+					logError(ctx, "reconcile Workspace gateway credential", c.ReconcileGateway(ctx, w))
+				}
 			}
 		})
 	}
@@ -463,16 +476,4 @@ func ReadOutput(fn func(io.Writer) error) (string, bool, error) {
 	var out capped
 	e := fn(&out)
 	return out.String(), out.truncated, e
-}
-
-func (c *Control) writeInitialCodexFiles(ctx context.Context, engine runtime.Engine, target runtime.Spec, id string) error {
-	files, err := c.Store.InitialCodexFiles(ctx)
-	if err != nil || files == (store.InitialCodexFiles{}) {
-		return err
-	}
-	writer, ok := engine.(runtime.InitialCodexFilesWriter)
-	if !ok {
-		return errors.New("the Workspace runtime cannot write initial Codex files")
-	}
-	return writer.WriteInitialCodexFiles(ctx, target, id, runtime.InitialCodexFiles(files))
 }

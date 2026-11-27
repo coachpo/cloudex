@@ -1,6 +1,6 @@
 "use client";
 
-import { Translation, useT } from "@/components/i18n-provider";
+import { useT } from "@/components/i18n-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { Operations, operationName } from "./operations";
 import { WorkspaceTerminal } from "./terminal";
 import { RemoteAccess } from "./remote-access";
 import { WorkspaceRepositoryCredential } from "./workspace-repository-credential";
+import { WorkspaceGrantSettings } from "./workspace-grant-settings";
 import { Empty, Facts, Loading, MetaItem, Meter, Notice, PageHeader, Status } from "./shared";
 import { hostName, statusName } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
@@ -80,10 +81,9 @@ export function WorkspaceDetails({id,view}: {id:string;view:string}) {
       </section>
     </Inspector>}
     {view==="access" && <RemoteAccess query={access}/>}
-    {view==="terminal" && <>
-      {running ? <WorkspaceTerminal key={w.generation} id={id}/> : <section className="panel"><div className="section-head"><h2>{t("developmentTerminal")}</h2></div>
-        <Empty large icon={SquareTerminal}>{unreachable?t("terminalHostUnavailable"):state==="paused"?t("terminalContainerPaused"):t("waitForWorkspaceStart")}</Empty></section>}
-      <p className="hint"><Info aria-hidden="true"/><span><Translation id="terminalLoginHint" values={{ command: <code className="code-inline">codex login --device-auth</code> }}/></span></p></>}
+    {view==="terminal" && (
+      running ? <WorkspaceTerminal key={w.generation} id={id}/> : <section className="panel"><div className="section-head"><h2>{t("developmentTerminal")}</h2></div>
+        <Empty large icon={SquareTerminal}>{unreachable?t("terminalHostUnavailable"):state==="paused"?t("terminalContainerPaused"):t("waitForWorkspaceStart")}</Empty></section>)}
     {view==="git" && <GitView id={id} running={running} unreachable={unreachable}/>}
     {view==="logs" && <LogsView id={id} generation={w.generation} reachable={reachable}/>}
     {view==="settings" && <WorkspaceSettings workspace={w} busy={busy} onQueued={queued}/>}
@@ -176,6 +176,7 @@ function LogsView({id,generation,reachable}:{id:string;generation:number;reachab
 function WorkspaceSettings({workspace:w,busy,onQueued}:{workspace:Workspace;busy:boolean;onQueued:(o:Accepted,k:string)=>void}) {
   const { t } = useT();
   return <div className="view-grid">
+      <WorkspaceGrantSettings key={w.id} id={w.id} busy={busy}/>
       {w.repo_url && <WorkspaceRepositoryCredential key={"credential-" + w.id} id={w.id} busy={busy}/>}
       <section className="panel danger-zone"><div className="section-head"><h2>{t("dataAndRemoval")}</h2></div>
         <p className="muted mb-4">{t("resetPurgeHint")}</p>

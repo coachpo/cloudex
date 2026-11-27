@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coachpo/cloudex/apps/api/internal/codexgateway"
 	"github.com/coachpo/cloudex/apps/api/internal/control"
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
@@ -26,6 +27,7 @@ type Server struct {
 	AgentCertificate string
 	DisconnectAgent  func(string)
 	SSHHosts         sshHostConnections
+	GrantGateway     *codexgateway.Service
 	hostModeMu       sync.Mutex
 	hostModeChanges  map[string]*hostModeChange
 }
@@ -34,6 +36,10 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, protectConsole)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { reply(w, r, 200, map[string]string{"status": "ok"}) })
+	if s.GrantGateway != nil {
+		handler := s.GrantGateway.GatewayHandler()
+		r.Handle("/g/v1/*", handler)
+	}
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(s.apiHeaders, s.origin)
 		r.Get("/auth/setup", s.setupStatus)
@@ -48,9 +54,15 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 			r.Put("/settings/access", s.setAccessSettings)
 			r.Get("/settings/ssh-keys", s.sshKeys)
 			r.Put("/settings/ssh-keys", s.setSSHKeys)
-			r.Get("/settings/codex-files", s.codexFiles)
-			r.Put("/settings/codex-files", s.setCodexFiles)
 			r.Put("/settings/workspace-image", s.setWorkspaceImage)
+			if s.GrantGateway != nil {
+				r.Get("/grants", s.grants)
+				r.Post("/grants/{grant}/disconnect", s.disconnectGrant)
+				r.Delete("/grants/{grant}", s.deleteGrant)
+				r.Post("/grant-authorizations", s.beginGrantAuthorization)
+				r.Get("/grant-authorizations/{authorization}", s.grantAuthorizationStatus)
+				r.Post("/grant-authorizations/{authorization}/confirm", s.confirmGrantAuthorization)
+			}
 			r.Get("/templates", s.templates)
 			r.Get("/hosts", s.hosts)
 			r.Post("/hosts", s.addHost)
@@ -89,6 +101,12 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 				r.Get("/repository-credential", s.getRepositoryCredential)
 				r.Put("/repository-credential", s.putRepositoryCredential)
 				r.Delete("/repository-credential", s.deleteRepositoryCredential)
+				if s.GrantGateway != nil {
+					r.Get("/grant-binding", s.grantBinding)
+					r.Put("/grant-binding", s.changeGrantBinding)
+					r.Delete("/grant-binding", s.changeGrantBinding)
+					r.Post("/gateway-credential/rotate", s.rotateGatewayCredential)
+				}
 			})
 			r.Get("/operations", s.operations)
 			r.Get("/operations/{operation}", s.getOperation)
@@ -102,7 +120,7 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 func protectConsole(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		next.ServeHTTP(w, r)
 	})
 }

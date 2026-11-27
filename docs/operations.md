@@ -8,13 +8,13 @@
 
 ### 投入使用
 
-向外开放入口前，先从本机完成[管理员初始化](#管理员账号)。项目投入使用时更新[环境判定](../AGENTS.md#环境与数据操作)和[迁移基线](../CONTRIBUTING.md#兼容与迁移)。若已有须保护的真实账号凭据，按 [ADR 0003](adr/0003-workspace-home-volume.md#复核条件) 和 [ADR 0002](adr/0002-workspace-repository-credential.md#复核条件)复核存储与下发方式。
+向外开放入口前，先从本机完成[管理员初始化](#管理员账号)。项目投入使用时更新[环境判定](../AGENTS.md#环境与数据操作)和[迁移基线](../CONTRIBUTING.md#兼容与迁移)。接入真实账号前，核对[上游公开支持边界](codex-gateway.md#上游公开支持边界)与实际部署方式。按 [ADR 0002](adr/0002-workspace-repository-credential.md#复核条件)复核仓库凭据的存储与下发方式。
 
 ### 预构建镜像
 
 使用 GHCR 的 `linux/arm64` 镜像时，为 `ghcr.io/coachpo/cloudex-api`、`ghcr.io/coachpo/cloudex-agent`、`ghcr.io/coachpo/cloudex-web` 和 `ghcr.io/coachpo/cloudex-workspace` 选择同一发布标签。
 
-原手册记载，推送 `v*` 标签会发布原标签、语义化版本标签、`sha-<完整提交>` 和 `latest`，手动构建只发布 `manual-<完整提交>`。当前标签约定未经核实。[镜像工作流](../.github/workflows/docker-images.yml)
+推送 `v*` 标签时发布原标签、语义化版本 `<主>.<次>.<修订>` 和 `<主>.<次>`、`sha-<完整提交>` 及 `latest`；手动运行工作流只发布 `manual-<完整提交>`，不更新 `latest`。[镜像工作流](../.github/workflows/docker-images.yml)
 
 ### 默认工作镜像
 
@@ -30,15 +30,44 @@
 docker compose exec api cloudex-server reset-admin
 ```
 
-## 初始 Codex 文件与登录
+## Codex 网关
 
-在 **设置 → 新工作区的初始 Codex 文件** 填写 `AGENTS.md` 和 `config.toml`。后续新建的 Workspace 在首次启动前收到这些文件。要修改已有 Workspace，请在其 home 目录中直接编辑。
+### 配置两条网络路径
 
-在每个 Workspace 运行一次 `codex login --device-auth`。登录状态、Codex 会话和 home 中的用户工具会随 home 命名卷保留。[持久化决定](adr/0003-workspace-home-volume.md)
+- **容器到推理网关。** 将 `CLOUDEX_GATEWAY_ORIGIN` 设为运行容器可解析、可通过受信任 TLS 连接的 HTTPS Origin，例如 `https://gateway.example.net`。留空时使用 HTTPS 控制台 Origin。若控制台也使用 HTTP 回环地址，留空会使推理接入不可用。在反向代理将 `/g/v1/` 原路径转给 Go 控制面。允许 WebSocket 升级和长连接，关闭 SSE 缓冲和代理自动重试。容器须信任证书链。专用网关 Origin 只需转发这组路由。Agent 在线或 SSH 直连成功只说明 Host 管理通路可用，仍须从两类 Host 的工作容器验证 DNS、TLS 和响应流。[配置示例](../.env.example) · [网关接口](api.md#workspace-推理网关)
+
+控制面需要能直接连接所选上游的 HTTPS 端点。上游 SSE 使用 HTTP/1.1，换绑准入覆盖请求写入连接的时点。入口反向代理只负责容器到控制面的链路。
+- **浏览器到授权回调。** 回调固定使用 `http://127.0.0.1:1455/auth/callback`，Compose 只在控制面宿主回环发布。默认端口已占用时，用 `CLOUDEX_OAUTH_CALLBACK_PORT=1457` 并匹配本地隧道。浏览器和控制面不在同一台机器时，先从浏览器所在机器运行下列命令，再发起授权。SSH 目的地是控制面宿主，工作容器所在的 Docker Host 无需访问回调端口。[回环回调转发](https://learn.chatgpt.com/docs/auth#fallback-forward-the-localhost-callback-over-ssh)
+
+```sh
+ssh -N -L 127.0.0.1:1455:127.0.0.1:1455 user@control-plane-host
+```
+
+两条路径中的代理、接入日志和追踪均应排除凭据。回调路径不得记录查询字符串，网关不得记录 Authorization、Cookie、提示词、流正文或工具参数。网关用内部 Workspace、授权、传输、阶段、请求 ID、终态和实际返回的用量排查问题。
+
+### 添加授权和绑定 Workspace
+
+1. 在 **设置 → Codex 授权** 选择 **Sign in with Codex** 或 **Sign in with ChatGPT**。在 OpenAI 页面使用自己的账号。回调成功后回到控制台，核对并确认账号和上游 workspace 或应用注册。ChatGPT 登录成功但未授予套餐推理权限时，按授权行提示对同一注册重新授权。
+2. 在 **Workspace → 设置** 选择一份授权。打开 Codex 前等待实例凭据就绪。换绑或轮换后重新启动客户端进程，Codex Desktop 需要重新连接 App Server。换绑后已发给旧上游的请求可能仍在执行。
+3. 从工作容器的 Shell 执行 `codex --version` 核对实际运行的版本。交互 `codex`、`codex exec` 和 `codex app-server` 使用工作镜像的启动入口读取当前绑定的模型配置。使用 `-m` 时选择当前目录中的模型 slug。固定版本和镜像构建入口见[工作镜像](../docker/Dockerfile.workspace)。
+
+```sh
+codex exec --skip-git-repo-check --json 'Return CLOUDEX_OK.'
+```
+
+在固定客户端与受控假上游中验收协议和转发，再分别按两种渠道的[公开支持边界](codex-gateway.md#上游公开支持边界)核实真实环境。登录、模型目录、建立连接、完成工具往返和最终 `response.completed` 各自对应不同验证阶段。[验收矩阵](codex-gateway-acceptance.md)
+
+### 恢复授权与凭据
+
+- **需重新授权。** 对受影响授权选择重新授权，使用原注册和同一已验证身份。刷新结果未知时需重新授权，以免再次使用可能已轮换的旧 refresh token。
+- **绑定成功，容器待准备。** 在 Host 详情核对连接，在 Workspace 查看容器的实际状态。Host 恢复后控制面会重新检查容器和凭据安装。配置过 HTTPS Origin 后，仍无推理响应时，先从工作容器排查网关 DNS、服务器证书和反代。
+- **推理提交结果未知。** 原上游可能仍在执行，也可能已完成。网关会拒绝原运行中的自动重发。检查本地工具是否已产生副作用，再决定是否从新的客户端运行发起请求。
+- **断开授权。** 先查看受影响的 Workspace。断开立即停止本地转发，保留 Workspace 的绑定供识别影响范围。远端撤权结果未知时，控制台显示本地已断开、远端未确认。删除授权前先解除所有绑定。
+- **套餐限流。** `subscription_sharing_usage_limit_exceeded` 表示本次授权的用量请求被拒，`subscription_sharing_usage_unavailable` 表示用量服务暂不可用。按当前授权恢复，保留服务报告的重试信息，其他授权仍按自己的状态工作。[错误与恢复契约](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
 
 ## 加入远程 Host
 
-此版本更新了 SQLite 基线。已有旧基线的开发环境须按项目的[零保留约定](../CONTRIBUTING.md#兼容与迁移)重新初始化，再登记 Host。
+零保留规则下 SQLite 迁移基线可以重写，已执行的迁移版本不会重跑。控制面数据库来自旧基线时，先按[零保留约定](../CONTRIBUTING.md#兼容与迁移)重新初始化，再登记 Host。
 
 同一 Docker Engine 只登记一次。容量和资源预留按 Host ID 统计，通过不同地址或接入方式重复登记会重复计算可用容量。在目标机[准备工作镜像](#默认工作镜像)后，按网络连接方向选择接入方式。
 
@@ -59,7 +88,7 @@ Docker 盘点失败而 SSH 仍可达时，Host 显示为 `degraded`，暂停新�
 ### Host Agent
 
 1. 将控制面的 `CLOUDEX_AGENT_BIND` 设为目标 Host 可达的私网地址并用 Compose 应用。在 **设置 → 接入地址** 填写 **Agent 公开地址**（`host:port`）。目标 Host 只需能向该地址建立出站连接，也可通过隧道连接。
-2. 在目标 Host 准备默认工作镜像。可拉取同一镜像，或在同版本仓库执行 `docker compose -f compose.agent.yaml --profile build build workspace-image`。`CLOUDEX_SSH_NETWORK` 须与控制面一致。
+2. 在目标 Host 准备默认工作镜像，可拉取预构建镜像或执行 `docker compose -f compose.agent.yaml --profile build build workspace-image`。从源码构建时，Host Agent 和工作镜像使用与控制面相同的仓库提交。`CLOUDEX_SSH_NETWORK` 须与控制面一致。
 3. 在 **Hosts → Add host** 领取一次性注册令牌，有效期 15 分钟。下载 `agent-ca.pem`，放在目标机的 `compose.agent.yaml` 旁，或用 `CLOUDEX_AGENT_CA_PATH` 指向已有文件。
 4. 在目标 Host 设置 `CLOUDEX_AGENT_ADDRESS` 和 `CLOUDEX_AGENT_ENROLLMENT_TOKEN`，启动 Agent。**Hosts** 显示 **Online** 后，从环境移除注册令牌并重新创建 Agent 容器，保留其状态卷。
 
@@ -91,8 +120,8 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 
 1. 在 **设置 → SSH 公钥** 填入本机 OpenSSH 公钥，每行一把。保存后，公钥立即用于新连接。可在同一处移除公钥。
 2. 启动并等待 **Gateway ready**。将 **Copy known_hosts entries** 的两条公钥加入本机 `~/.ssh/known_hosts`，再把 **Copy SSH config** 的两个 Host 块放在 `~/.ssh/config` 的通用 `Host *` 规则之前。使用非默认私钥时，为两个 Host 块填写同一 `IdentityFile`，或使用 SSH agent。
-3. 运行 `ssh <alias>` 验证完整链路。需要 Codex 时在远端执行 `command -v codex`。尚未登录可运行 `codex login --device-auth`，设备码登录须由账户或组织允许。[Codex 认证说明](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)
-4. 选择 **Add host in Codex Desktop**，或在桌面应用的 **Settings → Connections** 添加 SSH 别名，打开 `/workspace/project`。Desktop 使用远端 CLI 的登录并启动自己的 App Server。SSH、终端和 Desktop 共用工作树，避免同时编辑同一文件。[Codex Remote SSH 指南](https://learn.chatgpt.com/docs/remote-connections#connect-to-an-ssh-host)
+3. 运行 `ssh <alias>` 验证完整链路。使用 Codex 时，在远端执行 `codex --version` 核对客户端，再按[授权绑定步骤](#添加授权和绑定-workspace)运行。
+4. 选择 **Add host in Codex Desktop**，或在桌面应用的 **Settings → Connections** 添加 SSH 别名，打开 `/workspace/project`。Desktop 启动远端 App Server，并使用该容器的 Codex 配置。SSH、终端和 Desktop 共用工作树，避免同时编辑同一文件。[Codex Remote SSH 指南](https://learn.chatgpt.com/docs/remote-connections#connect-to-an-ssh-host)
 
 ## 健康检查与排障
 
@@ -100,15 +129,19 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 - **SSH**　**Gateway ready** 表示服务端已核实运行中的容器和内层主机公钥。仍须用客户端别名实际登录。Gateway 不会自动启动已停止的容器。重建期间暂停新转发，旧连接随旧容器退出。
 - **操作失败**　先看[操作详情](workspace-lifecycle.md#生命周期操作)，再用 `docker compose logs api` 查看启动、生命周期和 SSH 转发记录。Gateway 可记录转发起止，无法查看 Desktop 会话内容。
 
+Workspace 冷启动报 `workspace SSH daemon did not start` 时，先查容器日志核对 sshd 开始监听的时间，再检查 Host 同期是否在构建或解包镜像。保持工作镜像与容器配额相同，在 Host 空闲时复测，分别记录首次创建与重试的结果。
+
 ## 数据保留
 
-| 操作 | 项目卷 | home 卷 | SSH 主机密钥卷 | Git 凭据文件 |
+| 操作 | 项目卷 | 容器 home | SSH 主机密钥卷 | Git 凭据文件 |
 |---|---|---|---|---|
-| Stop / Start | 保留 | 保留 | 保留 | 同一容器保留原文件。 |
-| Rebuild | 保留 | 保留 | 保留 | 新容器使用当前设置。 |
-| Reset project | 删除并重新初始化 | 保留 | 保留 | 新容器使用当前设置。 |
-| Delete workspace | 默认保留，可显式清除 | 默认保留，可显式清除 | 默认保留，可显式清除 | 随容器删除。 |
+| Stop / Start | 保留 | 同一容器保留 home | 保留 | 同一容器保留原文件。 |
+| Rebuild | 保留 | 新容器从镜像初始化 | 保留 | 新容器使用当前设置。 |
+| Reset project | 删除并重新初始化 | 新容器从镜像初始化 | 保留 | 新容器使用当前设置。 |
+| Delete workspace | 默认保留，可显式清除 | 随容器删除 | 默认保留，可显式清除 | 随容器删除。 |
+
+表中的 home 位于容器可写层。
 
 停止、重建和 Host 失联时预留继续有效。删除并保留卷时只释放 CPU 和内存。要释放磁盘预留，应在删除 Workspace 时选择清除卷。直接在 Docker 清卷不会更新预留，保留的卷也不会自动挂到新 Workspace。
 
-需要保留数据时，分别保管控制面数据库、原 `CLOUDEX_MASTER_KEY`、使用 Agent 的 Host 的 Agent 状态卷，以及各 Host 的 Workspace 持久卷。控制台不管理备份。数据库及备份含明文仓库令牌，home 卷及其备份含 Workspace 内的登录凭据。恢复 Gateway 和 Agent CA 私钥、解密 SSH 直连凭据都需要原主密钥。项目数据、登录文件和私钥不得进入仓库或日志。[控制面卷](../compose.yaml) · [远程 Agent 卷](../compose.agent.yaml) · [删除后的操作历史](workspace-lifecycle.md#删除与历史)
+需要保留数据时，分别保管控制面数据库、原 `CLOUDEX_MASTER_KEY`、使用 Agent 的 Host 的 Agent 状态卷，以及各 Host 的 Workspace 持久卷。控制台不管理备份。数据库及备份含明文仓库令牌、加密的托管授权和 ChatGPT 注册使用的安装标识。恢复 SSH Gateway、Agent CA 或解密 SSH 直连凭据和上游令牌都需要原主密钥。实例网关凭据仅随当前容器的运行时内存文件存续。项目数据、登录文件和私钥须远离仓库和日志。[控制面卷](../compose.yaml) · [远程 Agent 卷](../compose.agent.yaml) · [删除后的操作历史](workspace-lifecycle.md#删除与历史)

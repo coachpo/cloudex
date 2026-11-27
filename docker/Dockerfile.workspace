@@ -1,23 +1,25 @@
 FROM node:26.13.1-trixie
 
-ARG CODEX_VERSION=0.170.0
+ARG CODEX_VERSION=0.172.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git openssh-client openssh-server procps python3 python3-venv ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/ssh/ssh_host_* \
     && npm install --global "@openai/codex@${CODEX_VERSION}" \
+    && install -d /usr/local/libexec \
+    && mv /usr/local/bin/codex /usr/local/libexec/cloudex-codex \
     && useradd --create-home --uid 10001 --user-group --shell /bin/bash --password '*' coder \
-    && install -d -o coder -g coder -m 0700 /workspace /home/coder/.codex \
+    && install -d -o coder -g coder -m 0700 /workspace \
     && install -d -o coder -g coder -m 0700 /home/coder/.config \
     && install -d -m 0755 /run/cloudex-ssh /etc/cloudex \
     && git config --system credential.helper '!/usr/local/bin/workspace-control git-credential' \
     && touch /workspace/.cloudex-volume \
-    && chown coder:coder /workspace/.cloudex-volume \
-    && printf 'cli_auth_credentials_store = "file"\n' > /home/coder/.codex/config.toml \
-    && chown coder:coder /home/coder/.codex/config.toml
+    && chown coder:coder /workspace/.cloudex-volume
 COPY docker/workspace-control.py /usr/local/bin/workspace-control
+COPY docker/workspace-codex.py /usr/local/bin/codex
 COPY docker/workspace-sshd.sh /usr/local/bin/workspace-sshd
 COPY docker/sshd_config /etc/cloudex-sshd_config
-RUN chmod 0755 /usr/local/bin/workspace-control /usr/local/bin/workspace-sshd
+RUN chmod 0755 /usr/local/bin/workspace-control /usr/local/bin/workspace-sshd /usr/local/bin/codex \
+    && test "$(/usr/local/libexec/cloudex-codex --version)" = "codex-cli ${CODEX_VERSION}"
 WORKDIR /workspace
 CMD ["/usr/local/bin/workspace-sshd"]

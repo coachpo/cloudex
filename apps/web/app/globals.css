@@ -234,7 +234,8 @@ a.stat:focus-visible { outline-offset: -2px; }
 /* Meters show one share of a whole; the exact figures sit beside them as text. */
 .meter { height: 6px; border-radius: 999px; background: var(--neutral-soft); overflow: hidden; }
 .meter > span { display: block; height: 100%; border-radius: 999px; background: var(--action); }
-.meter[data-level="high"] > span { background: var(--warning); }
+.meter[data-level="high"] > span, .meter[data-level="low"] > span { background: var(--warning); }
+.meter[data-level="critical"] > span { background: var(--danger); }
 .meter-row { display: grid; gap: 6px; }
 .meter-row .meter-figures { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--ink-muted); }
 .meter-row .meter-figures strong { color: var(--ink); font-weight: 600; }
@@ -397,15 +398,29 @@ textarea.field { min-height: 112px; resize: vertical; line-height: 1.55; }
 .settings-sections { display: grid; gap: 24px; min-width: 0; }
 .settings-sections > * { scroll-margin-top: calc(var(--header) + 16px); }
 
-/* Account cards (Codex) */
-.account-list { display: grid; gap: 12px; }
-.account { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; display: grid; gap: 14px; min-width: 0; }
-.account-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
-.account-head h3 { font-size: 15px; overflow-wrap: anywhere; }
-.tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); color: var(--ink-muted); font-size: 12px; font-weight: 500; }
-.quota { display: grid; gap: 10px; }
-.quota-windows { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-.quota-windows li { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: grid; gap: 8px; background: var(--sunken); }
+/* Inference authorizations */
+.grant-list { display: grid; gap: 12px; }
+.grant-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.grant-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.grant-card-head h3 { font-size: 15px; overflow-wrap: anywhere; }
+.grant-action-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(440px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 20px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+.grant-action-dialog[open] { display: grid; gap: 14px; }
+.grant-action-dialog h1 { font-size: 18px; overflow-wrap: anywhere; }
+.grant-action-dialog:modal { overscroll-behavior: contain; }
+.grant-action-dialog::backdrop { background: var(--overlay); overflow: hidden; overscroll-behavior: contain; }
 
 /* Login */
 .auth { min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

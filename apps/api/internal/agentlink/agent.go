@@ -244,8 +244,10 @@ func (a *executor) execute(ctx context.Context, peer *exchange, req request) (an
 			a.images = slices.Clone(req.Config.Images)
 		}
 		return nil, nil
-	case "ensure", "start", "stop", "remove", "purge", "write-initial-codex-files", "apply-git-credential", "sync-authorized-keys":
+	case "ensure", "start", "stop", "remove", "purge", "apply-git-credential", "sync-authorized-keys":
 		return a.mutate(ctx, req)
+	case "inspect-gateway-credential", "install-gateway-credential":
+		return a.gatewayCredential(ctx, req)
 	case "inspect", "artifacts-absent":
 		if req.Spec == nil {
 			return nil, errors.New("workspace specification required")
@@ -287,6 +289,33 @@ func (a *executor) execute(ctx context.Context, peer *exchange, req request) (an
 	default:
 		return nil, errors.New("unknown runtime request")
 	}
+}
+
+func (a *executor) gatewayCredential(ctx context.Context, req request) (runtime.GatewayCredentialConfirmation, error) {
+	var empty runtime.GatewayCredentialConfirmation
+	if req.Spec == nil || req.Spec.WorkspaceID == "" || req.GatewayInstance == nil ||
+		(req.WorkspaceID != "" && req.WorkspaceID != req.Spec.WorkspaceID) {
+		return empty, runtime.ErrOwnership
+	}
+	engine, ok := a.Engine.(runtime.GatewayCredentialRuntime)
+	if !ok {
+		return empty, errors.New("the Host Agent cannot verify gateway credentials")
+	}
+	unlock, err := a.lock(ctx, req.Spec.WorkspaceID)
+	if err != nil {
+		return empty, err
+	}
+	defer unlock()
+	ctx = runtime.WithOperation(ctx, req.OperationID, req.Spec.WorkspaceID)
+	if req.Method == "inspect-gateway-credential" {
+		return engine.InspectGatewayCredential(ctx, *req.Spec, *req.GatewayInstance)
+	}
+	if req.GatewayInstall == nil {
+		return empty, errors.New("gateway credential installation is required")
+	}
+	// Install is replayable by sequence and confirmed from the live tmpfs.
+	// The Agent operation journal never receives the installation payload.
+	return engine.InstallGatewayCredential(ctx, *req.Spec, *req.GatewayInstance, *req.GatewayInstall)
 }
 
 func (a *executor) validateContainer(ctx context.Context, id string) error {

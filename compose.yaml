@@ -6,7 +6,7 @@ services:
     environment:
       CLOUDEX_ADDR: 0.0.0.0:8080
       CLOUDEX_WEB_URL: http://web:3000
-      CLOUDEX_ORIGIN: ${CLOUDEX_ORIGIN:-http://localhost:3000}
+      CLOUDEX_ORIGIN: ${CLOUDEX_ORIGIN:-http://localhost:${CLOUDEX_PORT:-3000}}
       CLOUDEX_MASTER_KEY: ${CLOUDEX_MASTER_KEY:?Set CLOUDEX_MASTER_KEY in .env}
       CLOUDEX_DB_PATH: /data/cloud.sqlite
       CLOUDEX_SSH_BIND: ${CLOUDEX_SSH_BIND:-127.0.0.1}
@@ -15,6 +15,9 @@ services:
       CLOUDEX_SSH_NETWORK: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
       CLOUDEX_AGENT_LISTEN: 0.0.0.0:9443
       CLOUDEX_AGENT_BOOTSTRAP_SOCKET: /bootstrap/enroll.sock
+      CLOUDEX_GATEWAY_ORIGIN: ${CLOUDEX_GATEWAY_ORIGIN:-}
+      CLOUDEX_OAUTH_CALLBACK_PORT: ${CLOUDEX_OAUTH_CALLBACK_PORT:-1455}
+      CLOUDEX_OAUTH_CALLBACK_BIND: 0.0.0.0
     volumes:
       - cloud-db:/data
       - agent-bootstrap:/bootstrap
@@ -22,9 +25,11 @@ services:
       - "127.0.0.1:${CLOUDEX_PORT:-3000}:8080"
       - "${CLOUDEX_SSH_BIND:-127.0.0.1}:${CLOUDEX_SSH_PORT:-2222}:2222"
       - "${CLOUDEX_AGENT_BIND:-127.0.0.1}:${CLOUDEX_AGENT_PORT:-9443}:9443"
+      - "127.0.0.1:${CLOUDEX_OAUTH_CALLBACK_PORT:-1455}:${CLOUDEX_OAUTH_CALLBACK_PORT:-1455}"
     depends_on:
       - web
     restart: unless-stopped
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
       interval: 15s

@@ -36,6 +36,7 @@ func OperationFromContext(ctx context.Context) (operationID, workspaceID string)
 
 type Spec struct {
 	WorkspaceID, Image    string
+	CreationOperationID   string
 	Generation            int
 	ProjectVolumeRevision int
 	CPU, Memory           int64
@@ -58,6 +59,13 @@ type Container struct {
 	EnvNames     []string              `json:"env_names"`
 	Labels       map[string]string     `json:"labels"`
 	NetworkIPs   map[string]netip.Addr `json:"-"`
+}
+
+// CreationOperationLabel identifies the operation that created a candidate.
+const CreationOperationLabel = "cloud.creation_operation"
+
+func (c Container) CreatedByOperation(operationID string) bool {
+	return operationID != "" && c.Labels[CreationOperationLabel] == operationID
 }
 
 type Mount struct {
@@ -111,7 +119,7 @@ type Engine interface {
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Remove(context.Context, Spec) error
-	// Purge removes the project volume and, when purgeAll is true, the home and SSH host key volumes.
+	// Purge removes the project volume and, when purgeAll is true, the SSH host key volume.
 	Purge(ctx context.Context, spec Spec, purgeAll bool) error
 	Run(context.Context, string, Exec) (int, error)
 	SSHHostKey(context.Context, string) (string, error)

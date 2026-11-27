@@ -1,6 +1,6 @@
 # HTTP API
 
-业务接口位于 `/api/v1`。首次初始化和登录向未登录客户端开放，其余业务接口要求有效的管理员会话。写请求与 WebSocket 握手须携带与 `CLOUDEX_ORIGIN` 一致的 `Origin`。进程探针另见[健康检查与排障](operations.md#健康检查与排障)。
+业务接口位于 `/api/v1`。首次初始化和登录向未登录客户端开放。管理接口要求有效的管理员会话。写请求与控制台 WebSocket 握手须携带与 `CLOUDEX_ORIGIN` 一致的 `Origin`。OAuth 回调与容器推理使用各自的鉴权契约。进程探针另见[健康检查与排障](operations.md#健康检查与排障)。
 
 ## 路由与数据格式
 
@@ -11,15 +11,13 @@
 | 初始化、登录、会话和修改账号 | [账号和 Cookie](../apps/api/internal/httpapi/auth.go) |
 | 默认镜像和接入地址 | [控制面设置](../apps/api/internal/httpapi/settings.go) |
 | Host 登记、凭据更新、调度状态、盘点、容量和并发 | [Host 接口](../apps/api/internal/httpapi/hosts.go)、[SSH 直连接口](../apps/api/internal/httpapi/ssh_hosts.go)与[Host 状态](../apps/api/internal/store/hosts.go) |
-| 新 Workspace 的初始 Codex 文件 | [初始 Codex 文件](../apps/api/internal/httpapi/codex_files.go)与[生效时机](workspace-lifecycle.md#初始-codex-文件) |
+| Codex 授权、Workspace 绑定和实例凭据 | [管理 API 源码](../apps/api/internal/httpapi/grants.go) · [授权和绑定](#codex-授权和绑定) · [推理请求](#workspace-推理网关) |
 | Workspace 创建、放置、操作回执、历史、日志、指标与 Git | [Workspace 接口](../apps/api/internal/httpapi/workspaces.go)与[生命周期契约](workspace-lifecycle.md) |
 | 管理员公钥与 Workspace 连接信息 | [公钥接口](../apps/api/internal/httpapi/ssh.go)与[SSH 接入契约](workspace-access.md#ssh-接入信息) |
 
 首次初始化成功即建立会话。修改账号须验证当前密码，留空新密码可保留原密码。成功后旧会话失效，调用者须接受响应中的新 Cookie。[账号操作](operations.md#管理员账号)
 
 SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤销全部公钥。Workspace 的 Access 接口提供连接信息及是否配置公钥。在线 Host 下发失败时，返回 `SSH_KEY_SYNC_FAILED`，已保存的公钥列表仍用于 Gateway 鉴权。
-
-初始 Codex 文件设置接收 `agents_md` 和 `config_toml` 两个字符串。空字符串使用镜像对该文件的默认内容。
 
 SSH 主机名和 Agent 公开地址一起提交，空字符串清除对应设置。SSH 配置在主机名为空时使用绑定地址，新签发的注册材料使用当前 Agent 公开地址。默认工作镜像的修改立即适用于模板和新建的 Workspace。Host 可以报告多个镜像的放置就绪状态，实际 Docker 镜像清单另行查询。[默认工作镜像](operations.md#默认工作镜像)
 
@@ -41,3 +39,34 @@ Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。�
 ## Workspace 仓库凭据
 
 管理接口返回配置状态和用户名，令牌只写。[凭据接口](../apps/api/internal/httpapi/repository_credential.go)定义输入格式与删除响应。[仓库凭据](workspace-lifecycle.md#仓库凭据)说明创建重试、更新和撤销对已有容器的影响。
+
+## Codex 授权和绑定
+
+授权管理路径均相对于 `/api/v1`。Bearer、refresh token、ID token 和 OAuth 换码材料不通过管理 API 回读。账号显示字段用于辨识，授权身份以已验证的注册、subject 和适用的上游 workspace 为准。
+
+| 方法与路径 | 外部契约 |
+|---|---|
+| `GET /grants` | 返回每份授权的渠道、注册、已验证身份、状态及引用它的 Workspace。 |
+| `POST /grant-authorizations` | 提交 `channel`（`codex` 或 `chatgpt`）。重新授权时同时提交 `grant_id`，渠道及预期身份从现有授权确定。返回尝试 ID 与授权 URL。 |
+| `GET /grant-authorizations/{id}` | 发起授权的管理员会话查询尝试进度。换码和身份校验成功后返回待确认的身份。 |
+| `POST /grant-authorizations/{id}/confirm` | 发起会话核对身份后确认。添加已有授权或为原授权误选另一身份会报错，现有授权与绑定保持原值。 |
+| `POST /grants/{id}/disconnect` | 本地撤销该授权使用权，按原渠道尝试远端撤权。回读状态区分远端确认与结果未知。 |
+| `DELETE /grants/{id}` | 删除无引用授权。有引用时返回 `409` 和受影响 Workspace。 |
+| `GET /workspaces/{id}/grant-binding` | 返回保存的授权、`binding_revision` 及实例就绪状态。响应 `ETag` 可用于更新。 |
+| `PUT /workspaces/{id}/grant-binding` | 以 `{"grant_id":"…"}` 绑定授权。提交前核对目标的目录与推理权限，要求 `If-Match: "<binding_revision>"`。 |
+| `DELETE /workspaces/{id}/grant-binding` | 要求同样的 `If-Match`，解绑后保留版本。 |
+| `POST /workspaces/{id}/gateway-credential/rotate` | 撤销旧实例凭据并准备新凭据，保持授权与绑定版本。 |
+
+创建 Workspace 时可在 `POST /workspaces` 中提供 `grant_id`，由放置请求一起保存初始绑定。省略时可在 Workspace 创建后绑定。[创建接口](../apps/api/internal/httpapi/workspaces.go)
+
+重试已生效的绑定目标会返回当前绑定。带有旧版本且会改变目标的请求返回版本冲突。换绑成功时旧实例凭据不能再使用。回环监听器接收 `GET /auth/callback`，按一次性 `state` 匹配渠道和授权尝试。待确认结果只能由最初的管理员会话读取和保存。[回环网络](operations.md#配置两条网络路径) · [身份与刷新契约](codex-gateway.md#授权身份和刷新)
+
+## Workspace 推理网关
+
+| 方法与路径 | 外部契约 |
+|---|---|
+| `GET /g/v1/models` | 使用实例 Bearer 返回当前授权下适用于固定版 Codex 的目录。 |
+| `GET /g/v1/responses` | 使用同一 Bearer 请求 WebSocket Upgrade。成功建立上游连接且仍符合准入条件后才能收到 `101`。上游在提交生成前明确拒绝 Upgrade 时返回 `426`。 |
+| `POST /g/v1/responses` | 使用同一 Bearer 提交 HTTP Responses，正常响应以 SSE 流交付。需要继续工具调用时，客户端按适用协议回传结果和历史。 |
+
+实例凭据只对当前绑定和运行实例有效。客户端应保持本次启动的运行标识，明确的续轮才能越过可能已提交的记录。出现 `submission_outcome_unknown` 时，同一运行或 turn 可能已向上游发出生成。仅 `response.completed` 确认推理完成。模型能力错误应检查请求中的模型与字段，认证和限流错误按当前授权处理。[传输、回退和错误契约](codex-gateway.md#流式转发)
