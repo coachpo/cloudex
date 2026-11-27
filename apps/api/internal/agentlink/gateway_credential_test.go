@@ -178,7 +178,7 @@ func verifyGatewayCredentialHostRoute(t *testing.T, engine runtime.Engine, netwo
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
-	target := runtime.Spec{WorkspaceID: store.ID(), Generation: 1, CreationOperationID: store.ID(), Image: "cloudex/workspace:local", SSHNetwork: network, CPU: 500, Memory: 512}
+	target := runtime.Spec{WorkspaceID: store.ID(), Generation: 1, CreationOperationID: store.ID(), Image: store.DefaultWorkspaceImage, SSHNetwork: network, CPU: 500, Memory: 512}
 	created, err := engine.Ensure(ctx, target)
 	if err != nil {
 		t.Fatal(err)

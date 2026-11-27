@@ -76,7 +76,7 @@ services:
 
   workspace-image:
     profiles: ["build"]
-    image: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:local}
+    image: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:codex-0.172.0}
     build:
       context: .
       dockerfile: docker/Dockerfile.workspace

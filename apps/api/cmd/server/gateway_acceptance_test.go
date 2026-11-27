@@ -44,12 +44,20 @@ type acceptanceCase struct {
 	forceSSE, appServer, interactive bool
 }
 
+type acceptanceClient struct {
+	bin, gatewayHost, image, version string
+}
+
 // The HTTP gateway, persistence, adapters and OAuth flows are the production
 // paths. The native run stubs Host installation only. The Docker run confirms
 // the real tmpfs installer and uses the workspace image's normal entrypoints.
 // Every OpenAI-shaped endpoint is a loopback fixture.
 func TestPinnedCodexGatewayMatrix(t *testing.T) {
 	bin, dockerHost := os.Getenv("CLOUDEX_TEST_CODEX_BIN"), os.Getenv("CLOUDEX_TEST_GATEWAY_DNS")
+	image, version := os.Getenv("CLOUDEX_TEST_WORKSPACE_IMAGE"), os.Getenv("CLOUDEX_TEST_CODEX_VERSION")
+	if (image != "" || version != "") && (image == "" || version == "" || dockerHost == "") {
+		t.Fatal("set CLOUDEX_TEST_WORKSPACE_IMAGE, CLOUDEX_TEST_CODEX_VERSION and CLOUDEX_TEST_GATEWAY_DNS together for a candidate image")
+	}
 	if dockerHost != "" && os.Getenv("CLOUDEX_TEST_DOCKER") != "1" {
 		t.Fatal("set CLOUDEX_TEST_DOCKER=1 only with a disposable Docker daemon")
 	}
@@ -73,21 +81,26 @@ func TestPinnedCodexGatewayMatrix(t *testing.T) {
 		if !filepath.IsAbs(bin) {
 			t.Fatal("CLOUDEX_TEST_CODEX_BIN must be absolute")
 		}
+		client := acceptanceClient{bin: bin, image: store.DefaultWorkspaceImage, version: codexupstream.CodexClientVersion}
 		t.Run("native", func(t *testing.T) {
 			for _, tc := range cases {
-				t.Run(tc.name, func(t *testing.T) { runGatewayCase(t, tc, bin, "") })
+				t.Run(tc.name, func(t *testing.T) { runGatewayCase(t, tc, client) })
 			}
 		})
 	}
 	if dockerHost != "" {
+		if image == "" {
+			image, version = store.DefaultWorkspaceImage, codexupstream.CodexClientVersion
+		}
+		client := acceptanceClient{gatewayHost: dockerHost, image: image, version: version}
 		t.Run("docker", func(t *testing.T) {
 			for _, tc := range cases {
-				t.Run(tc.name, func(t *testing.T) { runGatewayCase(t, tc, "", dockerHost) })
+				t.Run(tc.name, func(t *testing.T) { runGatewayCase(t, tc, client) })
 			}
 			t.Run("codex-interactive", func(t *testing.T) {
 				runGatewayCase(t, acceptanceCase{
 					channel: codexupstream.ChannelCodex, expectedTransport: "ws", interactive: true,
-				}, "", dockerHost)
+				}, client)
 			})
 		})
 	}
@@ -98,7 +111,7 @@ type acceptanceCommands struct {
 	make, tty    func(...string) *exec.Cmd
 }
 
-func runGatewayCase(t *testing.T, tc acceptanceCase, bin, dockerHost string) {
+func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	t.Cleanup(cancel)
@@ -110,7 +123,7 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, bin, dockerHost string) {
 		otherChannel = codexupstream.ChannelCodex
 	}
 	other := newGatewayFixture(t, otherChannel, fixtureFault{})
-	tlsServer, origin, trust := makeAcceptanceTLS(t, dockerHost)
+	tlsServer, origin, trust := makeAcceptanceTLS(t, client.gatewayHost)
 	service, err := codexgateway.New(ctx, codexgateway.Config{
 		Store: db, Key: key, Origin: origin, RedirectURI: "http://127.0.0.1:1455/auth/callback",
 		Clients: []*codexupstream.Client{fake.adapter(), other.adapter()},
@@ -134,7 +147,7 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, bin, dockerHost string) {
 	tlsServer.StartTLS()
 	t.Cleanup(tlsServer.Close)
 	workspace := store.Workspace{
-		ID: store.ID(), Name: "gateway-acceptance", Image: store.DefaultWorkspaceImage,
+		ID: store.ID(), Name: "gateway-acceptance", Image: client.image,
 		Branch: "main", CPU: 500, Memory: 768, Desired: "running",
 	}
 	op, err := db.Create(ctx, workspace, "", "", nil)
@@ -158,20 +171,20 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, bin, dockerHost string) {
 	}
 
 	var commands acceptanceCommands
-	if dockerHost == "" {
+	if client.gatewayHost == "" {
 		info := runtime.Container{ID: "synthetic-container", State: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		workspace = finishAcceptanceWorkspace(t, ctx, db, op, info)
 		installed := &acceptanceCredential{}
 		if err := service.ReconcileGateway(ctx, workspace, info, installed); err != nil {
 			t.Fatal(err)
 		}
-		commands = prepareNativeCodex(t, ctx, installed.token, origin, trust, base, fake.model, bin, tlsServer.Client())
+		commands = prepareNativeCodex(t, ctx, installed.token, origin, trust, base, fake.model, client.bin, tlsServer.Client())
 	} else {
-		commands = prepareContainerCodex(t, ctx, db, op, workspace, service, trust, dockerHost)
+		commands = prepareContainerCodex(t, ctx, db, op, workspace, service, trust, client.gatewayHost)
 	}
 	version, err := commands.make("--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "codex-cli "+codexupstream.CodexClientVersion {
-		t.Fatalf("expected pinned Codex CLI, got %q (%v)", version, err)
+	if err != nil || strings.TrimSpace(string(version)) != "codex-cli "+client.version {
+		t.Fatalf("expected Codex CLI %s, got %q (%v)", client.version, version, err)
 	}
 	switch {
 	case tc.appServer:
@@ -478,7 +491,7 @@ func prepareContainerCodex(t *testing.T, ctx context.Context, db *store.Store, o
 		t.Fatalf("prepare controlled workspace: status %d (%v)\n%s", status, err, output.String())
 	}
 	// This disposable Docker fixture supplies its own container boundary.
-	// Its kernel does not support the pinned client's nested Linux sandbox.
+	// Its kernel does not support the client's nested Linux sandbox.
 	dockerCommand := func(mode string, args ...string) *exec.Cmd {
 		prefix := []string{"exec", mode, "--user", "coder", "--workdir", runtime.WorkDir, info.ID, "env"}
 		prefix = append(prefix, acceptanceProxyEnv(gatewayHost, cert)...)

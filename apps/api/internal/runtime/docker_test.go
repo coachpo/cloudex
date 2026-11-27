@@ -203,7 +203,7 @@ func TestStartDistinguishesLostResponseFromRejection(t *testing.T) {
 
 func TestDockerExecAttachRejectsPauseBeforeStart(t *testing.T) {
 	if os.Getenv("CLOUDEX_TEST_DOCKER") != "1" {
-		t.Skip("set CLOUDEX_TEST_DOCKER=1 on a disposable Docker daemon with cloudex/workspace:local available")
+		t.Skip("set CLOUDEX_TEST_DOCKER=1 on a disposable Docker daemon with the default Workspace image available")
 	}
 	ctx := t.Context()
 	cli, err := client.New(client.FromEnv)
@@ -212,7 +212,7 @@ func TestDockerExecAttachRejectsPauseBeforeStart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{
-		Image: "cloudex/workspace:local", Cmd: []string{"sleep", "infinity"},
+		Image: "cloudex/workspace:codex-0.172.0", Cmd: []string{"sleep", "infinity"},
 	}})
 	if err != nil {
 		t.Fatal(err)

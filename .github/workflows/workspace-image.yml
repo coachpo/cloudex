@@ -1,0 +1,130 @@
+name: Workspace Image
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: workspace-image-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Find latest stable Codex release
+        id: release
+        shell: bash
+        run: |
+          release=$(curl --fail --silent --show-error --retry 3 --max-time 30 \
+            https://api.github.com/repos/openai/codex/releases/latest)
+          version=$(jq -er '
+            select(.draft == false and .prerelease == false)
+            | .tag_name | capture("^rust-v(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)$").version
+          ' <<< "$release")
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/cloudex-workspace:codex-$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check publication and npm availability
+        id: candidate
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          CODEX_VERSION: ${{ steps.release.outputs.version }}
+          GHCR_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          image_path=${IMAGE#ghcr.io/}
+          token_response=$(curl --fail --silent --show-error --retry 3 --max-time 30 \
+            --user "$GITHUB_ACTOR:$GHCR_PASSWORD" --get \
+            --data-urlencode 'service=ghcr.io' \
+            --data-urlencode "scope=repository:${image_path%:*}:pull,push" https://ghcr.io/token)
+          token=$(jq -er '.token | select(type == "string" and length > 0)' <<< "$token_response")
+          status=$(curl --silent --show-error --retry 3 --max-time 30 --head \
+            --header "Authorization: Bearer $token" \
+            --header 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://ghcr.io/v2/${image_path%:*}/manifests/${image_path##*:}")
+          case "$status" in
+            200) echo "$IMAGE is already published"; exit 0 ;;
+            404) ;;
+            *) echo "GHCR manifest check returned HTTP $status for $IMAGE" >&2; exit 1 ;;
+          esac
+
+          status=$(curl --silent --show-error --retry 3 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://registry.npmjs.org/@openai%2fcodex/$CODEX_VERSION")
+          case "$status" in
+            200) echo 'build=true' >> "$GITHUB_OUTPUT" ;;
+            404) echo "Codex $CODEX_VERSION is not available on npm yet" ;;
+            *) echo "npm version check returned HTTP $status for Codex $CODEX_VERSION" >&2; exit 1 ;;
+          esac
+
+      - name: Checkout repository
+        if: steps.candidate.outputs.build == 'true'
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        if: steps.candidate.outputs.build == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Set up Docker Buildx
+        if: steps.candidate.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build candidate image into the local Docker daemon
+        if: steps.candidate.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.workspace
+          platforms: linux/arm64
+          load: true
+          tags: ${{ steps.release.outputs.image }}
+          build-args: CODEX_VERSION=${{ steps.release.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+          sbom: false
+
+      - name: Validate candidate version and run gateway acceptance
+        if: steps.candidate.outputs.build == 'true'
+        working-directory: apps/api
+        env:
+          CLOUDEX_TEST_DOCKER: '1'
+          CLOUDEX_TEST_WORKSPACE_IMAGE: ${{ steps.release.outputs.image }}
+          CLOUDEX_TEST_CODEX_VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          installed=$(docker run --rm --user coder --entrypoint codex "$CLOUDEX_TEST_WORKSPACE_IMAGE" --version)
+          if [[ "$installed" != "codex-cli $CLOUDEX_TEST_CODEX_VERSION" ]]; then
+            echo "Expected codex-cli $CLOUDEX_TEST_CODEX_VERSION, got $installed" >&2
+            exit 1
+          fi
+          CLOUDEX_TEST_GATEWAY_DNS=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+          export CLOUDEX_TEST_GATEWAY_DNS
+          go test -count=1 -v ./cmd/server -run '^TestPinnedCodexGatewayMatrix$/docker$'
+
+      - name: Log in to GHCR
+        if: steps.candidate.outputs.build == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the tested image
+        if: steps.candidate.outputs.build == 'true'
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+        run: docker push "$IMAGE"

@@ -1,4 +1,4 @@
-name: Docker Images
+name: Cloudex App Images
 
 # Release tags publish versioned images after the repository checks pass.
 # Manual runs publish manual-<full sha> tags only and never move latest.
@@ -62,9 +62,6 @@ jobs:
             target: agent
           - image: cloudex-web
             file: docker/Dockerfile.web
-            target: ''
-          - image: cloudex-workspace
-            file: docker/Dockerfile.workspace
             target: ''
     steps:
       - name: Checkout repository

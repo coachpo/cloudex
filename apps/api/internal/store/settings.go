@@ -5,7 +5,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const DefaultWorkspaceImage = "cloudex/workspace:local"
+const DefaultWorkspaceImage = "cloudex/workspace:codex-0.172.0"
 
 type Settings struct {
 	SSHHost            string

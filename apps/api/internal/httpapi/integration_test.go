@@ -378,7 +378,7 @@ func (a testAPI) shell(path string, cols, rows int, command, marker string) stri
 
 func TestDockerWorkspaceLifecycle(t *testing.T) {
 	if os.Getenv("CLOUDEX_TEST_DOCKER") != "1" {
-		t.Skip("set CLOUDEX_TEST_DOCKER=1 on a disposable Docker daemon with cloudex/workspace:local available")
+		t.Skipf("set CLOUDEX_TEST_DOCKER=1 on a disposable Docker daemon with %s available", store.DefaultWorkspaceImage)
 	}
 	ctx := t.Context()
 	s := newDB(t)

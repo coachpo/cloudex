@@ -12,11 +12,13 @@
 
 ### 预构建镜像
 
-使用 GHCR 的 `linux/arm64` 镜像时，为 `ghcr.io/coachpo/cloudex-api`、`ghcr.io/coachpo/cloudex-agent`、`ghcr.io/coachpo/cloudex-web` 和 `ghcr.io/coachpo/cloudex-workspace` 选择同一发布标签。
+Cloudex APP 的 `linux/arm64` 镜像 `ghcr.io/coachpo/cloudex-api`、`ghcr.io/coachpo/cloudex-agent` 和 `ghcr.io/coachpo/cloudex-web` 使用同一 Cloudex 发布标签。推送 `v*` 标签时发布原标签、语义化版本 `<主>.<次>.<修订>` 和 `<主>.<次>`、`sha-<完整提交>` 及 `latest`。手动构建使用 `manual-<完整提交>`。[APP 镜像工作流](../.github/workflows/docker-images.yml)
 
-推送 `v*` 标签时发布原标签、语义化版本 `<主>.<次>.<修订>` 和 `<主>.<次>`、`sha-<完整提交>` 及 `latest`；手动运行工作流只发布 `manual-<完整提交>`，不更新 `latest`。[镜像工作流](../.github/workflows/docker-images.yml)
+Workspace 镜像独立于 Cloudex APP 发版。独立工作流定时检查 [Codex 官方稳定版](https://github.com/openai/codex/releases/latest)。对应版本可从 npm 安装且 `ghcr.io/coachpo/cloudex-workspace:codex-<版本>` 尚未发布时，用候选镜像核对 `codex --version`，再运行当前仓库网关的受控验收。两项通过后发布该候选镜像。APP 发版和 Workspace 发版可各自进行，已发布的 Codex 标签直接复用。发布新标签不改变默认工作镜像。[Workspace 镜像工作流](../.github/workflows/workspace-image.yml) · [候选镜像验收](codex-gateway-acceptance.md#镜像与分机验证)
 
 ### 默认工作镜像
+
+仓库内置的本地默认工作镜像使用 `cloudex/workspace:codex-<版本>`。主动调整内置默认版本时，同步更新 Compose 的构建标签和控制面的默认镜像引用。[Codex 构建版本](../docker/Dockerfile.workspace) · [控制面默认镜像](../apps/api/internal/store/settings.go)
 
 先在各 Host 构建或拉取工作镜像，在控制台检查各 Host 对该镜像的就绪状态，再到 **设置** 切换默认镜像。`CLOUDEX_WORKSPACE_IMAGE` 只指定 Compose 构建标签。已有 Workspace 继续使用创建时的镜像引用，在所在 Host 保留对应镜像。
 
@@ -97,7 +99,7 @@ Docker 盘点失败而 SSH 仍可达时，Host 显示为 `degraded`，暂停新�
 ### Host Agent
 
 1. 将控制面的 `CLOUDEX_AGENT_BIND` 设为目标 Host 可达的私网地址并用 Compose 应用。在 **设置 → 接入地址** 填写 **Agent 公开地址**（`host:port`）。目标 Host 只需能向该地址建立出站连接，也可通过隧道连接。
-2. 在目标 Host 准备默认工作镜像，可拉取预构建镜像或执行 `docker compose -f compose.agent.yaml --profile build build workspace-image`。从源码构建时，Host Agent 和工作镜像使用与控制面相同的仓库提交。`CLOUDEX_SSH_NETWORK` 须与控制面一致。
+2. 在目标 Host 准备默认工作镜像，可拉取预构建镜像或执行 `docker compose -f compose.agent.yaml --profile build build workspace-image`。从源码构建 Host Agent 时，使用与控制面相同的仓库提交。`CLOUDEX_SSH_NETWORK` 须与控制面一致。
 3. 在 **Hosts → Add host** 领取一次性注册令牌，有效期 15 分钟。下载 `agent-ca.pem`，放在目标机的 `compose.agent.yaml` 旁，或用 `CLOUDEX_AGENT_CA_PATH` 指向已有文件。
 4. 在目标 Host 设置 `CLOUDEX_AGENT_ADDRESS` 和 `CLOUDEX_AGENT_ENROLLMENT_TOKEN`，启动 Agent。**Hosts** 显示 **Online** 后，从环境移除注册令牌并重新创建 Agent 容器，保留其状态卷。
 
