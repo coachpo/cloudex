@@ -327,6 +327,15 @@ async page => {
     const workspace = page.getByRole("region", { name: "Codex gateway", exact: true });
     const select = workspace.getByLabel("Choose authorization", { exact: true });
     const apply = workspace.getByRole("button", { name: "Apply authorization", exact: true });
+    const rotate = workspace.getByRole("button", { name: "Rotate container credential", exact: true });
+    const waitingForContainer = workspace.getByText("Waiting for the container", { exact: true });
+    await rotate.waitFor();
+    // The control plane loses and then restores its running-instance credential independently of this page.
+    binding.readiness = "pending";
+    await waitingForContainer.waitFor();
+    await rotate.waitFor({ state: "hidden" });
+    binding.readiness = "ready";
+    await rotate.waitFor();
     await select.selectOption(b.id);
     await workspace.getByText(/Changing the binding ends gateway connections/).waitFor();
     await apply.click();
@@ -335,11 +344,10 @@ async page => {
 
     await select.selectOption(b.id);
     await apply.click();
-    await workspace.getByText("Waiting for the container", { exact: true }).waitFor();
+    await waitingForContainer.waitFor();
     expect(requestedRevisions.join(",") === '"8","9"' && a.workspaces.map(workspace => workspace.id).join(",") === w2.id && b.workspaces.map(workspace => workspace.id).join(",") === w1.id,
       "The console did not apply the new binding to this workspace only");
     binding.readiness = "ready";
-    const rotate = workspace.getByRole("button", { name: "Rotate container credential", exact: true });
     await rotate.click();
     let dialog = page.getByRole("dialog", { name: "Rotate the container credential?" });
     await dialog.waitFor();

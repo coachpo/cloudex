@@ -192,7 +192,9 @@ func responsesReferences(item json.RawMessage) (call string, refs []string) {
 		refs = append(refs, gatewayDigest("item", object.ID))
 	}
 	var value any
-	if json.Unmarshal(item, &value) == nil {
+	decoder := json.NewDecoder(bytes.NewReader(item))
+	decoder.UseNumber()
+	if decoder.Decode(&value) == nil {
 		refs = collectOpaqueReferences(refs, value)
 	}
 	return call, refs

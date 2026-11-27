@@ -32,6 +32,7 @@ async page => {
     "/workspaces": [workspace],
     "/workspaces/fixture": workspace,
     "/workspaces/fixture/operations": operations,
+    "/workspaces/fixture/repository-credential": { configured: false, username: "" },
     "/workspaces/fixture/access": {
       has_public_keys: true, status: "ready", host: "127.0.0.1", bind: "127.0.0.1",
       port: 2222, user: "coder", alias: "fixture", project_path: "/workspace/project",
@@ -214,7 +215,9 @@ async page => {
     await page.goto(origin + "/settings");
     const accountSettings = page.getByRole("region", { name: "Account", exact: true });
     const accountMismatch = accountSettings.getByRole("alert").filter({ hasText: "Passwords do not match." });
-    await page.getByLabel("Current password", { exact: true }).fill("fixture-password");
+    const currentPassword = page.getByLabel("Current password", { exact: true });
+    check(await currentPassword.evaluate(field => field.form.method === "post"), "The account form permits credentials in the URL");
+    await currentPassword.fill("fixture-password");
     await page.getByLabel("New password (optional)", { exact: true }).fill("new-password");
     const accountConfirmation = page.getByLabel("Confirm new password", { exact: true });
     await accountConfirmation.fill("mistyped-password");
@@ -239,9 +242,15 @@ async page => {
     await page.getByLabel("Target host", { exact: true }).selectOption(host.id);
     const name = page.getByLabel("Workspace name", { exact: true });
     const create = page.getByRole("button", { name: "Create workspace", exact: true });
+    const unicodeName = String.fromCodePoint(0x10400).repeat(64);
+    await name.focus();
+    await page.keyboard.insertText(unicodeName);
+    check(await name.inputValue() === unicodeName, "The workspace name field truncated a valid 64-letter name");
     await page.locator("#url").fill("https://example.test/fixture.git");
     await page.locator("#repo-username").fill("fixture");
-    await page.locator("#repo-token").fill("test-value");
+    const repositoryToken = page.locator("#repo-token");
+    check(await repositoryToken.evaluate(field => field.form.method === "post"), "The workspace creation form permits credentials in the URL");
+    await repositoryToken.fill("test-value");
     await name.fill("  Browser fixture  ");
     await create.click();
     await page.locator("form").getByRole("alert").waitFor();
@@ -383,6 +392,7 @@ async page => {
 
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(origin + "/login");
+    check(await page.locator("#password").evaluate(field => field.form.method === "post"), "The login form permits credentials in the URL");
     const themeRatios = [];
     for (const [system, selection, color] of [
       ["light", "System", "rgb(244, 244, 242)"], ["dark", "System", "rgb(17, 17, 16)"],
@@ -411,6 +421,8 @@ async page => {
       await page.keyboard.press("Escape");
 
       await page.goto(origin + "/workspaces/fixture/settings");
+      check(await page.locator("#repo-credential-token").evaluate(field => field.form.method === "post"),
+        "The repository settings form permits credentials in the URL");
       const remove = page.getByRole("button", { name: "Delete workspace", exact: true });
       await remove.click();
       const confirm = page.getByRole("alertdialog").getByRole("button", { name: "Delete workspace", exact: true });

@@ -22,10 +22,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch("/api/v1" + path, { ...init, headers, cache: "no-store" });
   if (response.status === 204) return undefined as T;
   const json = await response.json().catch(() => null);
-  if (!response.ok || json === null || typeof json !== "object" || !("data" in json)) {
+  const data = json?.data;
+  if (!response.ok || data === null || typeof data !== "object") {
     throw new APIError(response.status, json?.error?.message ?? noResponseMessage, json?.error?.code, json?.error?.details);
   }
-  return json.data as T;
+  return data as T;
 }
 
 export function change<T>(path: string, method: string, data?: unknown, key?: string) {
@@ -109,9 +110,19 @@ export type Settings = {
   workspace_image: string;
   ssh_host: string; ssh_bind: string; agent_public_address: string;
 };
+
+export async function readSettings(signal?: AbortSignal) {
+  const settings = await api<Settings>("/settings", { signal });
+  if (typeof settings?.workspace_image !== "string" || typeof settings.ssh_host !== "string" ||
+    typeof settings.ssh_bind !== "string" || typeof settings.agent_public_address !== "string") {
+    throw new APIError(200, noResponseMessage);
+  }
+  return settings;
+}
+
 export const settingsQuery = {
   queryKey: ["settings"],
-  queryFn: ({ signal }: { signal: AbortSignal }) => api<Settings>("/settings", { signal }),
+  queryFn: ({ signal }: { signal: AbortSignal }) => readSettings(signal),
   refetchInterval: 5000,
 };
 export const workspaceImageDraft = (value: string | undefined, saved: string) => value?.trim() === saved ? undefined : value;
@@ -134,6 +145,8 @@ export async function replaceSession(client: QueryClient, session: Session) {
 }
 export const accountMutationKey = ["auth", "account"];
 export type Metrics = { cpu_percent: number | null; memory_bytes: number; memory_limit_bytes: number };
+// HTML counts UTF-16 code units. The API allows up to 64 Unicode code points.
+export const workspaceOrHostNameMaxLength = 64 * 2;
 export const active = (state?: string) => state === "queued" || state === "running";
 export const workspaceState = (w: Workspace) => w.paused && w.observed_state === "stopped" ? "paused" : w.observed_state;
 export const wsPath = (id: string) => "/workspaces/" + encodeURIComponent(id);

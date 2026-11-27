@@ -19,6 +19,7 @@ type lifecycleEngine struct {
 	starts     int
 	purged     []string
 	inspectErr error // returned by the next Inspect only
+	startErr   error // returned by the next Start before touching the container
 	stop       func(*runtime.Container) error
 	ensure     func() error
 }
@@ -64,6 +65,10 @@ func (e *lifecycleEngine) SSHHostKey(context.Context, string) (string, error) {
 }
 
 func (e *lifecycleEngine) Start(_ context.Context, id string) error {
+	if err := e.startErr; err != nil {
+		e.startErr = nil
+		return err
+	}
 	e.starts++
 	e.container(id).State = "running"
 	return nil
@@ -147,6 +152,24 @@ func TestStartThatNeverReachedDockerDoesNotBreakWorkspace(t *testing.T) {
 	}
 }
 
+func TestStartRejectedByRuntimeCanBeRetried(t *testing.T) {
+	ctx := t.Context()
+	db, w, ci := seedRecoveryWorkspace(t, "stopped", nil)
+	preflightErr := errors.New("runtime could not verify the container before Start")
+	engine := &lifecycleEngine{containers: map[int]*runtime.Container{1: &ci}, startErr: preflightErr}
+	c := &Control{Store: db, Engine: engine}
+
+	op := runOperation(t, c, w.ID, "start", false)
+	ws, err := db.Workspace(ctx, w.ID)
+	if err != nil || op.Status != "failed" || op.Error != preflightErr.Error() || engine.starts != 0 ||
+		ws.Observed != "stopped" || ws.Desired != "stopped" || ws.Error != "" || ws.StartUnverified {
+		t.Fatalf("rejected Start changed the Workspace: operation=%+v starts=%d workspace=%+v err=%v", op, engine.starts, ws, err)
+	}
+	if op = runOperation(t, c, w.ID, "start", false); op.Status != "succeeded" || engine.starts != 1 {
+		t.Fatalf("Start could not be retried: %+v starts=%d", op, engine.starts)
+	}
+}
+
 func TestFailedStopIsLeftToReconciliation(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -178,6 +201,46 @@ func TestFailedStopIsLeftToReconciliation(t *testing.T) {
 			}
 			if _, _, err := db.ReadyContainer(ctx, w.ID); err != nil {
 				t.Fatalf("running Workspace refused interactive access after a failed Stop: %v", err)
+			}
+		})
+	}
+}
+
+func TestStopDoesNotAdoptAnUnrecordedContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		replacedEarly bool
+	}{
+		{name: "replaced before Stop", replacedEarly: true},
+		{name: "replaced during Stop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			db, w, ci := seedRecoveryWorkspace(t, "running", nil)
+			const replacementID = "unrecorded-container"
+			recordedID := ci.ID
+			wantStopTarget := recordedID
+			if tc.replacedEarly {
+				ci.ID = replacementID
+				wantStopTarget = ""
+			}
+			var stopTarget string
+			engine := &lifecycleEngine{containers: map[int]*runtime.Container{1: &ci}, stop: func(c *runtime.Container) error {
+				stopTarget = c.ID
+				c.ID, c.State = replacementID, "exited"
+				return nil
+			}}
+			c := &Control{Store: db, Engine: engine}
+			op := runOperation(t, c, w.ID, "stop", false)
+			record, err := db.Container(ctx, w.ID, w.Generation)
+			if err != nil || record.ID != recordedID || stopTarget != wantStopTarget ||
+				op.Status != "failed" || op.Error != runtime.ErrOwnership.Error() {
+				t.Fatalf("Stop settled as %s (%s), target %q, recorded ID %q (%v)", op.Status, op.Error, stopTarget, record.ID, err)
+			}
+			reconcileOnce(ctx, c)
+			ws, err := db.Workspace(ctx, w.ID)
+			if err != nil || ws.Observed != "error" || ws.Desired != "stopped" {
+				t.Fatalf("replacement was not left for reconciliation: %+v %v", ws, err)
 			}
 		})
 	}

@@ -32,7 +32,7 @@ export function WorkspaceRepositoryCredential({ id, busy }: { id: string; busy: 
     <div className="section-head"><h2 id="workspace-repository-credential">{t("repositoryCredential")}</h2></div>
     {query.error && <Notice error={query.error} retry={() => query.refetch()}/>}
     {!status && !query.error && <Loading label={t("repositoryCredentialLoading")} rows={2}/>}
-    {status && <form className="form" onSubmit={event => {
+    {status && <form className="form" method="post" onSubmit={event => {
       event.preventDefault();
       if (disabled) return;
       const fields = new FormData(event.currentTarget);

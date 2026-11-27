@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
-	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 	"google.golang.org/grpc"
 )
@@ -214,12 +213,12 @@ func (a *executor) exchange(parent context.Context, conn grpc.ClientConnInterfac
 }
 
 // Docker connection loss does not establish the state of a remote mutation.
-// A Docker error reply does, even a 5xx Start the control plane verifies later
-// through ErrStartOutcomeUnknown, so it is not reported as a lost Host.
+// Docker's HTTP errors, including 503, reach the control plane as replies.
+// The control plane verifies Starts with ErrStartOutcomeUnknown separately.
 func runtimeOutcome(err error) error {
 	var networkError net.Error
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.As(err, &networkError) || errdefs.IsUnavailable(err) || client.IsErrConnectionFailed(err) {
+		errors.As(err, &networkError) || client.IsErrConnectionFailed(err) {
 		return unavailable(err)
 	}
 	return err

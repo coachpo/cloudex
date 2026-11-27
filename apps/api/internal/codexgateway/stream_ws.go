@@ -106,7 +106,7 @@ func (g *gatewayTransport) openWebSocket(w http.ResponseWriter, r *http.Request,
 			if refusal == nil {
 				refusal = codexupstream.ClassifyResponseError(response)
 			}
-			failure = redactRefusal(refusal, upstream.Token)
+			failure = redactUpstreamError(refusal, upstream.Token)
 		}
 		return a.WithWrite(upstream.TokenVersion, func() error {
 			g.responseHeaders(w.Header(), response.Header, scope, upstream, false)

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Check, Clock, Copy, Download, KeyRound, RadioTower } from "lucide-react";
-import { change, hostListQuery, hostPath, hostQuery, stamp, type Host, type HostEnrollment } from "@/lib/api";
+import { change, hostListQuery, hostPath, hostQuery, stamp, workspaceOrHostNameMaxLength, type Host, type HostEnrollment } from "@/lib/api";
 import { Button } from "./ui/button";
 import { Field, FieldGroup, FieldLabel } from "./ui/field";
 import { Notice } from "./shared";
@@ -108,7 +108,7 @@ export function HostEnrollmentPanel({ host, onClose }: { host?: Host; onClose: (
           <FieldGroup className="form">
             <Field className="fields">
               <FieldLabel htmlFor="host-name">{t("hostName")}</FieldLabel>
-              <input className="field" id="host-name" name="name" required maxLength={64} placeholder={t("hostNameExample")}/>
+              <input className="field" id="host-name" name="name" required maxLength={workspaceOrHostNameMaxLength} placeholder={t("hostNameExample")}/>
             </Field>
           </FieldGroup>}
         {mutation.error && <Notice error={mutation.error}/>}

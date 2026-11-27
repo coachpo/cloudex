@@ -2,7 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
-import { APIError, change, hostListQuery, hostPath, hostQuery, type Host } from "@/lib/api";
+import { APIError, change, hostListQuery, hostPath, hostQuery, workspaceOrHostNameMaxLength, type Host } from "@/lib/api";
 import { useT } from "./i18n-provider";
 import { Notice } from "./shared";
 import { Button } from "./ui/button";
@@ -61,7 +61,7 @@ export function HostSSHForm({ host, pending, setPending, onClose }: {
   return <form className="form" method="post" aria-labelledby="enrollment-heading" onSubmit={submit}>
     {!host && <Field className="fields">
       <FieldLabel htmlFor="ssh-host-name">{t("hostName")}</FieldLabel>
-      <input className="field" id="ssh-host-name" name="name" required maxLength={64} readOnly={pending} placeholder={t("hostNameExample")}/>
+      <input className="field" id="ssh-host-name" name="name" required maxLength={workspaceOrHostNameMaxLength} readOnly={pending} placeholder={t("hostNameExample")}/>
     </Field>}
     <Field className="fields">
       <FieldLabel htmlFor="ssh-host-address">{t("hostSSHAddress")}</FieldLabel>

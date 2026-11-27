@@ -165,8 +165,12 @@ func writeGatewayFailure(w http.ResponseWriter, err error) {
 	_ = writeGatewayChunk(w, body, false)
 }
 
-func redactRefusal(err *codexupstream.UpstreamError, grant codexupstream.Grant) error {
-	refusal := *err
+func redactUpstreamError(err error, grant codexupstream.Grant) error {
+	var upstream *codexupstream.UpstreamError
+	if !errors.As(err, &upstream) {
+		return err
+	}
+	refusal := *upstream
 	refusal.Body = redactResponseJSON(refusal.Body, grant)
 	refusal.Code = redactUpstreamString(refusal.Code, grant)
 	refusal.Param = redactUpstreamString(refusal.Param, grant)
@@ -185,25 +189,46 @@ func redactUpstreamString(value string, grant codexupstream.Grant) string {
 }
 
 func redactResponseJSON(body []byte, grant codexupstream.Grant) []byte {
+	if !jsonContainsCredential(body, grant) {
+		return body
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	redacted, _ := json.Marshal(redactResponseValue(value, grant))
+	return redacted
+}
+
+func jsonContainsCredential(body []byte, grant codexupstream.Grant) bool {
 	// Scan the wire form before decoding so normal stream events stay intact.
 	for _, secret := range []string{grant.AccessToken, grant.RefreshToken, grant.IDToken} {
 		if secret == "" {
 			continue
 		}
 		encoded, _ := json.Marshal(secret)
-		if !bytes.Contains(body, []byte(secret)) && !bytes.Contains(body, encoded[1:len(encoded)-1]) {
-			continue
+		if bytes.Contains(body, []byte(secret)) || bytes.Contains(body, encoded[1:len(encoded)-1]) {
+			return true
 		}
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.UseNumber()
-		var value any
-		if err := decoder.Decode(&value); err != nil {
-			return nil
-		}
-		redacted, _ := json.Marshal(redactResponseValue(value, grant))
-		return redacted
 	}
-	return body
+	if bytes.IndexByte(body, '\\') == -1 {
+		return false
+	}
+	// JSON strings can escape any character. Inspect decoded tokens before
+	// merging duplicate keys so overwritten values are checked as well.
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	for {
+		value, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		if value, ok := value.(string); ok && redactUpstreamString(value, grant) != value {
+			return true
+		}
+	}
 }
 
 func redactResponseValue(value any, grant codexupstream.Grant) any {

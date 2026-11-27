@@ -154,17 +154,16 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		bad(w, r, "Provide an Idempotency-Key of 1–128 characters.")
 		return
 	}
-	metadata := []any{"create", in.Name, in.Template, in.Repository.URL, in.Repository.Branch, in.Resources, desired, in.Placement.HostID}
+	var repositoryUsername string
 	if credential != nil {
-		metadata = append(metadata, credential.Username)
+		repositoryUsername = credential.Username
 	}
-	if in.GrantID != "" {
-		if s.GrantGateway == nil {
-			problem(w, r, http.StatusServiceUnavailable, "gateway_not_configured", "The gateway is unavailable.")
-			return
-		}
-		metadata = append(metadata, in.GrantID)
+	if in.GrantID != "" && s.GrantGateway == nil {
+		problem(w, r, http.StatusServiceUnavailable, "gateway_not_configured", "The gateway is unavailable.")
+		return
 	}
+	hash := fingerprint([]any{"create", in.Name, in.Template, in.Repository.URL, in.Repository.Branch,
+		in.Resources, desired, in.Placement.HostID, repositoryUsername, in.GrantID})
 	settings, e := s.Store.Settings(r.Context())
 	if e != nil {
 		failure(w, r, e)
@@ -174,9 +173,9 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		CPU: in.Resources.CPU, Memory: in.Resources.Memory, Desired: desired, HostID: in.Placement.HostID, Disk: in.Resources.Disk}
 	var o store.Operation
 	if in.GrantID == "" {
-		o, e = s.Store.Create(r.Context(), ws, key, fingerprint(metadata), credential)
+		o, e = s.Store.Create(r.Context(), ws, key, hash, credential)
 	} else {
-		o, e = s.GrantGateway.CreateWorkspace(r.Context(), ws, key, fingerprint(metadata), credential, in.GrantID)
+		o, e = s.GrantGateway.CreateWorkspace(r.Context(), ws, key, hash, credential, in.GrantID)
 	}
 	if e != nil {
 		grantFailure(w, r, e)

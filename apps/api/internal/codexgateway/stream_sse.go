@@ -135,7 +135,7 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 		_ = a.WithWrite(0, func() error { return g.complete(a.Context, scope, current, progress) })
 		timer := time.AfterFunc(streamIdleTimeout, cancel)
 		defer timer.Stop()
-		upstreamError := redactRefusal(codexupstream.ClassifyResponseError(response), upstream.Token)
+		upstreamError := redactUpstreamError(codexupstream.ClassifyResponseError(response), upstream.Token)
 		if err := a.WithWrite(0, func() error {
 			g.responseHeaders(w.Header(), response.Header, scope, upstream, false)
 			writeGatewayFailure(w, upstreamError)
@@ -217,7 +217,7 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 				return err
 			}
 		}
-		data = redactSSEData(data, upstream.Token)
+		data = redactResponseJSON(data, upstream.Token)
 		if !bytes.Equal(data, event.data) {
 			event.wire = event.wireWithData(data)
 		}
@@ -406,36 +406,6 @@ func responsesSSEKind(event sseEvent) (kind string, named, valid bool) {
 	}
 	valid = err == nil && (kind != "response.completed" || message.Response != nil && validGatewayID(message.Response.ID))
 	return kind, named, valid
-}
-
-func redactSSEData(data []byte, grant codexupstream.Grant) []byte {
-	redacted := redactResponseJSON(data, grant)
-	if !bytes.Equal(data, redacted) || bytes.IndexByte(data, '\\') == -1 {
-		return redacted
-	}
-	// Scan decoded strings before merging duplicate keys so even an overwritten
-	// value cannot pass through the raw event with an escaped credential.
-	input := bytes.NewReader(data)
-	decoder := json.NewDecoder(input)
-	decoder.UseNumber()
-	for {
-		value, err := decoder.Token()
-		if err != nil {
-			return data
-		}
-		if value, ok := value.(string); ok && redactUpstreamString(value, grant) != value {
-			break
-		}
-	}
-	input.Reset(data)
-	decoder = json.NewDecoder(input)
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil
-	}
-	redacted, _ = json.Marshal(redactResponseValue(value, grant))
-	return redacted
 }
 
 type sseEvent struct {

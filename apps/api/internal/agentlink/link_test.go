@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
+	"github.com/containerd/errdefs"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -367,6 +368,33 @@ func TestRuntimeStreamsUseTheAssignedHost(t *testing.T) {
 	local, err := hub.Engine("local").Inspect(ctx, runtime.Spec{})
 	if err != nil || local.ID != "local-container" {
 		t.Fatalf("disconnect affected another host: %#v, %v", local, err)
+	}
+}
+
+func TestAgentStartDistinguishesDockerReplyFromTransportLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		lost bool
+	}{
+		{name: "Docker returned 503", err: errdefs.ErrUnavailable},
+		{name: "Docker reply was lost", err: io.ErrUnexpectedEOF, lost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hub, server, beats := testHub(t, nil)
+			agent := Agent{Engine: &fakeRuntime{start: func(context.Context) error {
+				return fmt.Errorf("%w: %w", runtime.ErrStartOutcomeUnknown, tc.err)
+			}}}
+			startTestAgent(t, server, "host", agent)
+			awaitHeartbeat(t, beats, "host")
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			err := hub.Engine("host").Start(ctx, "container")
+			if !errors.Is(err, runtime.ErrStartOutcomeUnknown) || errors.Is(err, runtime.ErrHostUnavailable) != tc.lost {
+				t.Fatalf("Start returned %v, want unknown outcome with Host unavailable=%t", err, tc.lost)
+			}
+		})
 	}
 }
 

@@ -383,6 +383,11 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 	}
 	ctx := t.Context()
 	s := newDB(t)
+	if image := os.Getenv("CLOUDEX_TEST_WORKSPACE_IMAGE"); image != "" {
+		if err := s.SetWorkspaceImage(ctx, image); err != nil {
+			t.Fatal(err)
+		}
+	}
 	instance, e := s.Instance(ctx)
 	if e != nil {
 		t.Fatal(e)
@@ -457,6 +462,19 @@ func TestDockerWorkspaceLifecycle(t *testing.T) {
 	imageWorkspace, imagePath, imageInfo := create("image home")
 	if !a.exec(d, imageInfo.ID, `test -w ~/.config && test -s ~/.bashrc`) {
 		t.Fatal("the fresh container did not inherit the image's home files")
+	}
+	if !a.exec(d, imageInfo.ID, `set -eu
+cd /workspace
+git init --quiet --initial-branch=main fixture-repository
+git -C fixture-repository -c user.name=Fixture -c user.email=fixture@example.test -c commit.gpgsign=false \
+    commit --quiet --allow-empty -m Fixture
+git -C fixture-repository tag release-only
+mv project fixture-original-project
+if workspace-control init /workspace/fixture-repository release-only; then exit 1; fi
+test ! -e project
+workspace-control init /workspace/fixture-repository main
+test "$(git -C project symbolic-ref --short HEAD)" = main`) {
+		t.Fatal("workspace initialization did not reject a tag-only reference and retry with a branch")
 	}
 	var op acceptance
 	a.call("DELETE", imagePath, map[string]any{"confirm": imageWorkspace, "purge": true}, 202, &op)

@@ -59,7 +59,7 @@ test("open console views observe an updated default image without navigating", a
   let image = "workspace:before";
   t.mock.method(globalThis, "fetch", async (path) => {
     const data = {
-      "/api/v1/settings": { workspace_image: image },
+      "/api/v1/settings": { workspace_image: image, ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" },
       "/api/v1/templates": [{ image }],
       "/api/v1/hosts": [{ status: "online", scheduling_state: "enabled", images: [{ image, ready: true }] }],
     }[path];

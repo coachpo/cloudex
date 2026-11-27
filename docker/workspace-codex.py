@@ -2,6 +2,7 @@
 """Launch Codex with this Workspace's gateway and a grant-specific home."""
 
 import hashlib
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path
@@ -51,7 +52,7 @@ def load_catalog(base, token):
     except HTTPError as error:
         try:
             code = json.loads(error.read(4096))["error"]["code"]
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, HTTPException, ValueError, KeyError, TypeError):
             code = None
         finally:
             error.close()
@@ -60,7 +61,7 @@ def load_catalog(base, token):
         if error.code == 401:
             raise GatewayUnavailable("The Workspace gateway credential is inactive. Check its authorization binding.")
         raise GatewayUnavailable(f"The Cloudex model catalog request failed (HTTP {error.code}).")
-    except OSError:
+    except (OSError, HTTPException):
         raise GatewayUnavailable("Unable to reach the Cloudex model catalog. Check gateway DNS and TLS.")
     try:
         if len(catalog) > CATALOG_LIMIT:

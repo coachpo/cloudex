@@ -58,7 +58,7 @@ export default function Login() {
         {setup.error ? <Notice error={setup.error} retry={() => setup.refetch()}/> :
           required === undefined ? <Loading label={t("checkingSetup")} rows={0}/> : <>
           <h1 id="auth-heading">{required ? t("createAdministrator") : t("signIn")}</h1>
-          <form key={String(required)} className="form" onSubmit={submit} onChange={event => {
+          <form key={String(required)} className="form" method="post" onSubmit={submit} onChange={event => {
             if (!mismatch) return;
             const data = new FormData(event.currentTarget);
             if (data.get("password") === data.get("confirmation")) setMismatch(false);

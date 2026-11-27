@@ -39,7 +39,7 @@ export const grantsQuery = {
 export const grantBindingQuery = (id: string) => ({
   queryKey: [...grantBindingsKey, id] as const,
   queryFn: ({ signal }: { signal: AbortSignal }) => api<GrantBinding>(grantBindingPath(id), { signal }),
-  refetchInterval: ({ state }: { state: { data?: GrantBinding } }) => state.data?.readiness === "pending" ? 2500 : false,
+  refetchInterval: ({ state }: { state: { data?: GrantBinding } }) => state.data?.readiness === "pending" ? 2500 : 5000,
 });
 
 export function grantName(identity: GrantIdentity) {

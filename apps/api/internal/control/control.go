@@ -86,8 +86,7 @@ func spec(w store.Workspace, gen int) runtime.Spec {
 var errStartUnverified = errors.New("verify started container")
 var errResetCheckpoint = errors.New("persist project volume change")
 
-// A rejection fails a Start or Stop without marking the Workspace as broken:
-// Start was not sent to Docker, or reconciliation observes what Stop left.
+// A rejection fails an operation without overwriting the existing observation.
 type rejection struct{ error }
 
 func (r rejection) Unwrap() error { return r.error }
@@ -182,7 +181,7 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 		target.CreationOperationID = o.ID
 	}
 	inspect := func() (runtime.Container, error) {
-		if o.Type == "start" {
+		if o.Type == "start" || o.Type == "stop" {
 			return c.Inspect(ctx, w)
 		}
 		return engine.Inspect(ctx, target)
@@ -248,7 +247,6 @@ func (c *Control) lifecycle(ctx context.Context, w store.Workspace, o store.Oper
 						return e
 					}
 				}
-				reject = false // Docker now decides the outcome.
 				return engine.Start(ctx, ci.ID)
 			})
 			if e != nil {

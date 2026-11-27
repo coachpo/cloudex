@@ -139,6 +139,11 @@ def initialize(url, branch):
             env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
             subprocess.run(["git", "clone", "--branch", branch, "--", url, staging],
                            env=env, check=True, stdin=subprocess.DEVNULL, stdout=sys.stderr)
+            # Git also accepts tags for --branch, leaving the checkout detached.
+            head = subprocess.run(["git", "-C", staging, "symbolic-ref", "--quiet", "HEAD"],
+                                  stdout=subprocess.DEVNULL)
+            if head.returncode != 0:
+                raise ValueError("The requested Git ref is not a branch.")
         else:
             subprocess.run(["git", "init", "--quiet", "--initial-branch", branch, staging], check=True)
             subprocess.run(["git", "-C", staging, "-c", "user.name=Workspace",

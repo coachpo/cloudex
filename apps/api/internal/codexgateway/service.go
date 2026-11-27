@@ -285,7 +285,7 @@ func (s *Service) upstream(ctx context.Context, grantID string, epoch int64) (Up
 	if route.epoch != g.GrantEpoch || route.version != g.TokenVersion {
 		value, err := client.ResolveRoute(ctx, token)
 		if err != nil {
-			return Upstream{}, err
+			return Upstream{}, redactUpstreamError(err, token)
 		}
 		route = routeSnapshot{epoch: g.GrantEpoch, version: g.TokenVersion, route: value}
 		state.mu.Lock()
@@ -311,7 +311,7 @@ func (s *Service) models(ctx context.Context, id string, epoch int64, upstream U
 	}
 	catalog, err := upstream.Client.ListModels(ctx, upstream.Token, upstream.Route)
 	if err != nil {
-		return codexupstream.Catalog{}, err
+		return codexupstream.Catalog{}, redactUpstreamError(err, upstream.Token)
 	}
 	if len(catalog.Slugs) == 0 {
 		return codexupstream.Catalog{}, &Error{Status: http.StatusUnprocessableEntity, Code: "no_compatible_models", Message: "The grant's directory has no model compatible with Codex " + codexupstream.CodexClientVersion + "."}

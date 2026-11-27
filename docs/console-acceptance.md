@@ -21,7 +21,7 @@
 | U5 查看并离开长输出。准备可滚动的日志、工作树状态和已跟踪文件差异 | 在测试工作树提交一个多行样本文件后修改全部行，再创建足量未跟踪样本使 status 可滚动；日志用多次 SSH 连接生成，长度不足时可单独以 120 行合成 logs GET 验证呈现，并注明替身。用 Tab 分别进入 Container logs、Working tree、Git patch，再 PageDown。随后在浏览器网络层暂挂一个已发出的 Git GET，点击 Logs，观察请求取消再解除挂起。 | 三个有名称的 region 都可键盘进入；各自 scrollTop 增加、内容可读。离页触发 Git 请求 aborted/requestfailed，Logs 显示自己的数据，迟到结果不覆盖当前视图。保存焦点、滚动前后值和请求时间线。 |
 | U6 访问错误地址。已有有效 Workspace ID | 在地址栏分别直接进入 /unknown 和 /workspaces/{有效ID}/unknown，查看文档请求状态，在两页各用键盘激活返回 Workspaces 的链接。 | 两页均有一个 main、可读的 Page not found，返回链接实际打开 /workspaces 并显示列表。整页未知路径 HTTP 404；Workspace 的未知子页因流式路由已发头，文档 HTTP 200。 |
 | U7 保存 SSH 公钥。准备两把有效测试公钥 | 保存第一把公钥，继续编辑成另一把，暂不保存。 | 首次保存显示成功，继续编辑后旧成功提示消失。独立 GET 仍为最后一次保存的公钥。 |
-| U8 选择主题并离开菜单。登录页、新浏览器上下文 | 分别模拟系统浅/深并选择 System，再在系统深/浅下显式选择 Light/Dark，每次重载。打开主题菜单分别以 Tab、Shift+Tab、Esc 退出。 | 四组 body 背景依次为 #f6f7f9、#171719、#f6f7f9、#171719。Tab 关闭并进 Username，Shift+Tab 离开菜单，Esc 关闭后焦点回主题按钮；记录计算样式和焦点。 |
+| U8 选择主题并离开菜单。登录页、新浏览器上下文 | 分别模拟系统浅/深并选择 System，再在系统深/浅下显式选择 Light/Dark，每次重载。打开主题菜单分别以 Tab、Shift+Tab、Esc 退出。 | 四组 body 背景依次为 `#f4f4f2`、`#111110`、`#f4f4f2`、`#111110`。Tab 关闭并进 Username，Shift+Tab 离开菜单，Esc 关闭后焦点回主题按钮；记录计算样式和焦点。 |
 | U9 控制面异常回包。新开已登录的设置页 | 仅对真实页面读取 /settings 的那次 GET 用代理返回 HTTP 200、JSON 字符串 `"unexpected response"`；观察错误后放行正确响应并重试。 | 页面显示控制面未返回有效响应的错误，可恢复显示设置值。保留响应类型、状态和页面错误；若出现未捕获 TypeError、空白页或把异常值当保存结果均失败。 |
 
 ## 删除与授权保存的故障反馈

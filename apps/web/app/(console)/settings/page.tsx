@@ -4,7 +4,7 @@ import { useT } from "@/components/i18n-provider";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
-import { accountMutationKey, APIError, api, change, hostImageReady, hostListQuery, hostPath, replaceSession, saveSetting, sessionQuery,
+import { accountMutationKey, APIError, api, change, hostImageReady, hostListQuery, hostPath, readSettings, replaceSession, saveSetting, sessionQuery,
   settingsQuery, templatesQuery, workspaceImageDraft, publicKeyLines, type Session, type Settings } from "@/lib/api";
 import { hostName } from "@/lib/i18n";
 import { Loading, Notice, PageHeader, Status } from "@/components/shared";
@@ -51,7 +51,7 @@ function AccountSettings({ username }: { username: string }) {
 
   return <section className="panel" id="account" aria-labelledby="account-heading">
     <div className="section-head"><h2 id="account-heading">{t("account")}</h2></div>
-    <form className="form" key={username} ref={form} onSubmit={submit} onChange={event => {
+    <form className="form" method="post" key={username} ref={form} onSubmit={submit} onChange={event => {
       if (!mismatch) return;
       const data = new FormData(event.currentTarget);
       if (data.get("new_password") === data.get("confirmation")) setMismatch(false);
@@ -170,7 +170,7 @@ function AccessSettings({ settings, observedAt, unavailable }: SettingsObservati
     mutationFn: async (edits: Partial<AccessAddresses>) => {
       // The PUT requires both fields, including any field edited only in another tab.
       const current = edits.ssh_host === undefined || edits.agent_public_address === undefined
-        ? await api<AccessAddresses>("/settings") : settings;
+        ? await readSettings() : settings;
       const submitted = {
         ssh_host: edits.ssh_host ?? current.ssh_host,
         agent_public_address: edits.agent_public_address ?? current.agent_public_address,

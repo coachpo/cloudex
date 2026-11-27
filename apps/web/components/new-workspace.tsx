@@ -11,7 +11,7 @@ import { Server, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { APIError, canPlaceOnHost, change, GiB, hostListQuery, idempotencyKey, hostPlacementIssue, hostResourceFields, MiB, templatesQuery,
-  type Accepted, type Host, type HostResources } from "@/lib/api";
+  workspaceOrHostNameMaxLength, type Accepted, type Host, type HostResources } from "@/lib/api";
 
 export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
   const { t } = useT();
@@ -71,7 +71,7 @@ export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
     <PageHeader crumbs={[{ href: "/workspaces", label: t("workspaces") }]} current={t("newWorkspace")} title={t("newWorkspace")}
       description={template && <>{template.name} · <code className="wide-code">{template.image}</code></>}/>
     {!template ? (templates.error ? <Notice error={templates.error} retry={()=>templates.refetch()}/> : <Loading label={t("loadingTemplate")}/>) :
-      <form className="create-layout" aria-label={t("workspaceConfig")} onSubmit={submit}>
+      <form className="create-layout" method="post" aria-label={t("workspaceConfig")} onSubmit={submit}>
         <div className="stack-lg">
           <section className="panel form" aria-labelledby="new-workspace-placement">
             <div className="section-head mb-0"><h2 id="new-workspace-placement">{t("placement")}</h2></div>
@@ -102,7 +102,7 @@ export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
           </section>
           <section className="panel form" aria-labelledby="new-workspace-identity">
             <div className="section-head mb-0"><h2 id="new-workspace-identity">{t("workspace")}</h2></div>
-            <Field className="fields"><FieldLabel htmlFor="name">{t("workspaceName")}</FieldLabel><input className="field" id="name" name="name" maxLength={64} required placeholder={t("workspaceNameExample")}/></Field>
+            <Field className="fields"><FieldLabel htmlFor="name">{t("workspaceName")}</FieldLabel><input className="field" id="name" name="name" maxLength={workspaceOrHostNameMaxLength} required placeholder={t("workspaceNameExample")}/></Field>
             <label className="label-inline"><input type="checkbox" name="auto" defaultChecked/> {t("keepWorkspaceRunning")}</label>
           </section>
           <section className="panel form" aria-labelledby="new-workspace-repository">

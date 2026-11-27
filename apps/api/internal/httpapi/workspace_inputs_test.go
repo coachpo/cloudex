@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coachpo/cloudex/apps/api/internal/codexgateway"
 	"github.com/coachpo/cloudex/apps/api/internal/control"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 )
@@ -43,6 +44,43 @@ func TestWorkspaceCreationRejectsInvalidRepositoryBeforeAllocation(t *testing.T)
 		"name":       "valid repository",
 		"repository": map[string]string{"url": "https://git.example.invalid:8443/project.git", "branch": "head"},
 	}, http.StatusAccepted, nil)
+}
+
+func TestWorkspaceCreationKeyDistinguishesRepositoryUsernameFromGrant(t *testing.T) {
+	db := newDB(t)
+	a := newTestServer(t, &Server{
+		Control: &control.Control{Store: db}, Origin: testOrigin,
+		GrantGateway: &codexgateway.Service{Store: db},
+	})
+	a.call(http.MethodPost, "/auth/setup", credentials{Username: "admin", Password: syntheticPassword}, http.StatusOK, nil)
+	const repo = "https://git.example.test/repo"
+	const key = "create-with-credential"
+	grantID := store.ID()
+	create := func(body map[string]any, want int) string {
+		t.Helper()
+		response := a.raw(http.MethodPost, "/workspaces", testOrigin, key, body)
+		defer response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("create HTTP %d, want %d", response.StatusCode, want)
+		}
+		return response.Header.Get("Location")
+	}
+	withCredential := func(token string) map[string]any {
+		return map[string]any{
+			"name": "same workspace",
+			"repository": map[string]any{
+				"url": repo, "credential": repositoryCredentialInput{Username: grantID, Token: token},
+			},
+		}
+	}
+	location := create(withCredential("original-test-token"), http.StatusAccepted)
+	if replay := create(withCredential("updated-test-token"), http.StatusAccepted); location == "" || replay != location {
+		t.Fatalf("token-only change returned operation %q, want %q", replay, location)
+	}
+	create(map[string]any{
+		"name": "same workspace", "grant_id": grantID,
+		"repository": map[string]string{"url": repo},
+	}, http.StatusConflict)
 }
 
 func TestRepositoryCredentialInputValidation(t *testing.T) {
