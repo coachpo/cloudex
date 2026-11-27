@@ -30,32 +30,34 @@ CREATE TABLE workspaces (
   paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
   start_unverified INTEGER NOT NULL DEFAULT 0 CHECK (start_unverified IN (0, 1)),
   observation_version INTEGER NOT NULL DEFAULT 0,
-  assigned_host_id TEXT REFERENCES host_nodes(id),
+  assigned_host_id TEXT REFERENCES host_nodes(id) ON DELETE CASCADE,
   disk_bytes INTEGER NOT NULL DEFAULT 0 CHECK (disk_bytes >= 0)
 );
 CREATE UNIQUE INDEX workspace_live_name ON workspaces(name) WHERE deleted_at IS NULL;
 
 CREATE TABLE workspace_repository_credentials (
-  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   host TEXT NOT NULL,
   username TEXT NOT NULL,
   token TEXT NOT NULL
 );
 
+-- Host IDs on Workspace records describe routing or history. Their owner is
+-- the Workspace, whose assigned_host_id determines the cascade from a Host.
 CREATE TABLE containers (
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,
   docker_id TEXT NOT NULL UNIQUE,
   image_id TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  host_id TEXT REFERENCES host_nodes(id),
+  host_id TEXT,
   PRIMARY KEY (workspace_id, generation)
 );
 
 CREATE TABLE operations (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('create','start','stop','rebuild','delete','reset')),
   status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
   target_generation INTEGER NOT NULL,
@@ -67,13 +69,14 @@ CREATE TABLE operations (
   error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   finished_at TEXT,
-  host_id TEXT REFERENCES host_nodes(id),
+  host_id TEXT,
   retry_after INTEGER NOT NULL DEFAULT 0,
   reacquired_reservation INTEGER NOT NULL DEFAULT 0 CHECK (reacquired_reservation IN (0,1))
 );
 CREATE UNIQUE INDEX one_operation ON operations(workspace_id) WHERE status IN ('queued','running');
 CREATE UNIQUE INDEX operation_key ON operations(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX operation_queue ON operations(status,created_at);
+CREATE INDEX operations_by_workspace ON operations(workspace_id);
 
 CREATE TABLE ssh_public_keys (public_key TEXT PRIMARY KEY);
 
@@ -106,7 +109,7 @@ CREATE TABLE host_nodes (
 
 CREATE TABLE host_enrollment_tokens (
   token_hash TEXT PRIMARY KEY,
-  host_id TEXT NOT NULL REFERENCES host_nodes(id),
+  host_id TEXT NOT NULL REFERENCES host_nodes(id) ON DELETE CASCADE,
   expires_unix INTEGER NOT NULL,
   used_at TEXT,
   revoked_at TEXT
@@ -114,7 +117,7 @@ CREATE TABLE host_enrollment_tokens (
 CREATE INDEX host_enrollment_by_host ON host_enrollment_tokens(host_id);
 
 CREATE TABLE host_capacity (
-  host_id TEXT PRIMARY KEY REFERENCES host_nodes(id),
+  host_id TEXT PRIMARY KEY REFERENCES host_nodes(id) ON DELETE CASCADE,
   cpu_allocatable INTEGER NOT NULL DEFAULT 0 CHECK (cpu_allocatable >= 0),
   memory_allocatable INTEGER NOT NULL DEFAULT 0 CHECK (memory_allocatable >= 0),
   disk_allocatable INTEGER NOT NULL DEFAULT 0 CHECK (disk_allocatable >= 0),
@@ -123,13 +126,13 @@ CREATE TABLE host_capacity (
   disk_reserved INTEGER NOT NULL DEFAULT 0 CHECK (disk_reserved >= 0)
 );
 
-CREATE INDEX workspaces_by_host ON workspaces(assigned_host_id,created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX workspaces_by_host ON workspaces(assigned_host_id,deleted_at,created_at DESC);
 
 CREATE INDEX operation_host_status ON operations(host_id,status,created_at);
 
 CREATE TABLE workspace_reservations (
-  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
-  host_id TEXT NOT NULL REFERENCES host_nodes(id),
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
   cpu_milli INTEGER NOT NULL CHECK (cpu_milli >= 0),
   memory_bytes INTEGER NOT NULL CHECK (memory_bytes >= 0),
   disk_bytes INTEGER NOT NULL CHECK (disk_bytes >= 0),

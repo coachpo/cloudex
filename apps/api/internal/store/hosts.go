@@ -13,13 +13,16 @@ const LocalHostID = "local"
 const HostLease = 30 * time.Second
 
 var (
-	ErrInvalidEnrollment = errors.New("host enrollment is invalid or expired")
-	ErrHostUnauthorized  = errors.New("host identity is no longer authorized")
-	ErrHostOffline       = errors.New("selected host is unreachable")
-	ErrHostCordoned      = errors.New("selected host is cordoned")
-	ErrHostDisabled      = errors.New("selected host is disabled")
-	ErrHostIncompatible  = errors.New("selected host does not have the workspace image")
-	ErrHostMode          = errors.New("invalid host mode")
+	ErrInvalidEnrollment  = errors.New("host enrollment is invalid or expired")
+	ErrHostUnauthorized   = errors.New("host identity is no longer authorized")
+	ErrHostOffline        = errors.New("selected host is unreachable")
+	ErrHostCordoned       = errors.New("selected host is cordoned")
+	ErrHostDisabled       = errors.New("selected host is disabled")
+	ErrHostIncompatible   = errors.New("selected host does not have the workspace image")
+	ErrHostMode           = errors.New("invalid host mode")
+	ErrLocalHostProtected = errors.New("the local host cannot be deleted")
+	ErrHostHasWorkspaces  = errors.New("host has workspaces")
+	ErrHostHasPendingOps  = errors.New("host has pending operations")
 )
 
 type Resources struct {
@@ -128,6 +131,33 @@ func (s *Store) Host(ctx context.Context, id string) (Host, error) {
 	return findHost(ctx, s.db, id)
 }
 
+func (s *Store) DeleteHost(ctx context.Context, id string) (connectionType string, err error) {
+	if id == LocalHostID {
+		return "", ErrLocalHostProtected
+	}
+	// The write transaction serializes the dependency checks and cascade with placement and dispatch.
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		var pending, workspaces bool
+		if err := tx.QueryRowContext(ctx, `SELECT connection_type,
+ EXISTS(SELECT 1 FROM operations WHERE host_id=?1 AND status IN ('queued','running'))
+ OR EXISTS(SELECT 1 FROM workspaces w JOIN operations o ON o.workspace_id=w.id
+  WHERE w.assigned_host_id=?1 AND o.status IN ('queued','running')),
+ EXISTS(SELECT 1 FROM workspaces WHERE assigned_host_id=?1 AND deleted_at IS NULL)
+ FROM host_nodes WHERE id=?1`, id).Scan(&connectionType, &pending, &workspaces); err != nil {
+			return missing(err)
+		}
+		if pending {
+			return ErrHostHasPendingOps
+		}
+		if workspaces {
+			return ErrHostHasWorkspaces
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM host_nodes WHERE id=?`, id)
+		return err
+	})
+	return
+}
+
 func (s *Store) HostMaxOperationsTarget(ctx context.Context, id string) (int, error) {
 	var target int
 	err := s.db.QueryRowContext(ctx, "SELECT max_operations_target FROM host_nodes WHERE id=?", id).Scan(&target)
@@ -163,6 +193,11 @@ func insertEnrollment(ctx context.Context, tx *sql.Tx, id, tokenHash string, exp
 	return err
 }
 
+func revokeEnrollment(ctx context.Context, tx *sql.Tx, id string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE host_enrollment_tokens SET revoked_at=? WHERE host_id=? AND used_at IS NULL AND revoked_at IS NULL`, now(), id)
+	return err
+}
+
 func (s *Store) RenewEnrollment(ctx context.Context, id, tokenHash string, expires time.Time) (h Host, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -176,7 +211,7 @@ func (s *Store) RenewEnrollment(ctx context.Context, id, tokenHash string, expir
 		if h.Scheduling == "disabled" {
 			return ErrHostDisabled
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE host_enrollment_tokens SET revoked_at=? WHERE host_id=? AND used_at IS NULL AND revoked_at IS NULL`, now(), id); err != nil {
+		if err := revokeEnrollment(ctx, tx, id); err != nil {
 			return err
 		}
 		return insertEnrollment(ctx, tx, id, tokenHash, expires)
@@ -301,7 +336,7 @@ func (s *Store) SetHostScheduling(ctx context.Context, id, state string) (h Host
 			return err
 		}
 		if state == "disabled" {
-			if _, err := tx.ExecContext(ctx, `UPDATE host_enrollment_tokens SET revoked_at=? WHERE host_id=? AND used_at IS NULL AND revoked_at IS NULL`, now(), id); err != nil {
+			if err := revokeEnrollment(ctx, tx, id); err != nil {
 				return err
 			}
 		}

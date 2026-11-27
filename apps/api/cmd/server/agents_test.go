@@ -9,8 +9,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -18,10 +22,14 @@ import (
 
 	"github.com/coachpo/cloudex/apps/api/internal/agentauth"
 	"github.com/coachpo/cloudex/apps/api/internal/agentlink"
+	"github.com/coachpo/cloudex/apps/api/internal/control"
+	"github.com/coachpo/cloudex/apps/api/internal/httpapi"
 	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -153,17 +161,30 @@ func TestAgentImageSetReconcilesIndependentlyOfLimitAndReadiness(t *testing.T) {
 }
 
 type agentServicesFixture struct {
-	db    *store.Store
-	path  string
-	conn  *grpc.ClientConn
-	close func()
+	db         *store.Store
+	path       string
+	address    string
+	caPEM      string
+	conn       *grpc.ClientConn
+	disconnect func(string)
+	close      func()
 }
 
 func startTestAgentServices(t *testing.T, ctx context.Context) agentServicesFixture {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cloud.sqlite")
-	socket := filepath.Join(dir, "agent.sock")
+	// Keep the Unix socket path short even for tests with long names.
+	socketDir, err := os.MkdirTemp("", "clx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(socketDir); err != nil {
+			t.Error(err)
+		}
+	})
+	socket := filepath.Join(socketDir, "agent.sock")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +232,10 @@ func startTestAgentServices(t *testing.T, ctx context.Context) agentServicesFixt
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return agentServicesFixture{db: db, path: path, conn: conn, close: closeServices}
+	return agentServicesFixture{
+		db: db, path: path, address: address, caPEM: services.caPEM, conn: conn,
+		disconnect: services.Disconnect, close: closeServices,
+	}
 }
 
 func TestAgentShutdown(t *testing.T) {
@@ -369,6 +393,133 @@ func TestAgentHeartbeatConfigure(t *testing.T) {
 	var end wrapperspb.BytesValue
 	if err := exchange.RecvMsg(&end); !errors.Is(err, io.EOF) {
 		t.Fatalf("configuration exchange did not finish after its result: %v", err)
+	}
+}
+
+func TestDeleteHostDisconnectsRegisteredAgent(t *testing.T) {
+	fixture := startTestAgentServices(t, t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	const token = "initial-test-enrollment-token"
+	host, err := fixture.db.AddHost(ctx, "Remote Agent", agentauth.TokenHash(token), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "agent-ca.pem")
+	if err := os.WriteFile(ca, []byte(fixture.caPEM), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client := agentauth.Client{Address: fixture.address, CAFile: ca, StateDir: dir, Token: token}
+	identity, err := client.Bootstrap(ctx)
+	if err != nil || identity.HostID != host.ID {
+		t.Fatalf("remote enrollment: host=%s, err=%v", identity.HostID, err)
+	}
+	const pendingToken = "pending-test-enrollment-token"
+	if _, err := fixture.db.RenewEnrollment(ctx, host.ID, agentauth.TokenHash(pendingToken), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	tls, err := identity.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial := func() *grpc.ClientConn {
+		t.Helper()
+		conn, err := grpc.NewClient(fixture.address, grpc.WithTransportCredentials(credentials.NewTLS(tls)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	openControl := func(conn *grpc.ClientConn) grpc.ClientStream {
+		t.Helper()
+		desc := &grpc.StreamDesc{ClientStreams: true, ServerStreams: true}
+		stream, err := conn.NewStream(ctx, desc, "/cloudex.agent.v1.AgentLink/Connect")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stream
+	}
+	stream := openControl(dial())
+	publishHeartbeat := func(version string) {
+		t.Helper()
+		sendAgentTestFrame(t, stream, "heartbeat", agentlink.Inventory{
+			Version: version, MaxConcurrent: host.MaxOperationsTarget, Host: runtime.Host{CPUs: 2, Memory: 1 << 30},
+			Images: []agentlink.ImageStatus{{Image: store.DefaultWorkspaceImage, Ready: true}},
+		})
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			current, err := fixture.db.Host(ctx, host.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Status == "online" && current.AgentVersion == version {
+				return
+			}
+			select {
+			case <-tick.C:
+			case <-ctx.Done():
+				t.Fatalf("remote Agent did not publish heartbeat %s", version)
+			}
+		}
+	}
+	publishHeartbeat("2.5.0")
+
+	const origin = "http://localhost:3000"
+	handler := (&httpapi.Server{
+		Control: &control.Control{Store: fixture.db}, Origin: origin, DisconnectAgent: fixture.disconnect,
+	}).Handler(http.NotFoundHandler())
+	setup := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/auth/setup",
+		strings.NewReader(`{"username":"admin","password":"deletion-test-only"}`))
+	setup.Header.Set("Origin", origin)
+	setup.Header.Set("Content-Type", "application/json")
+	initialized := httptest.NewRecorder()
+	handler.ServeHTTP(initialized, setup)
+	cookies := initialized.Result().Cookies()
+	if initialized.Code != http.StatusOK || len(cookies) != 1 {
+		t.Fatalf("initialize admin: %d %s", initialized.Code, initialized.Body)
+	}
+	deleteHost := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/api/v1/hosts/"+host.ID, nil)
+		req.Header.Set("Origin", origin)
+		req.AddCookie(cookies[0])
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	create, err := fixture.db.Create(ctx, store.Workspace{
+		ID: store.ID(), HostID: host.ID, Name: "Pending Workspace", Image: store.DefaultWorkspaceImage,
+		Branch: "main", CPU: 500, Memory: 512, Desired: "stopped",
+	}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := deleteHost(); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "HOST_HAS_PENDING_OPERATIONS") {
+		t.Fatalf("delete while creation is pending: %d %s", response.Code, response.Body)
+	}
+	publishHeartbeat("2.5.1") // The same control stream must survive the rejection.
+	if err := fixture.db.CancelOp(ctx, create.ID); err != nil {
+		t.Fatal(err)
+	}
+	if response := deleteHost(); response.Code != http.StatusNoContent {
+		t.Fatalf("delete remote Host after cancellation: %d %s", response.Code, response.Body)
+	}
+	var received wrapperspb.BytesValue
+	if err := stream.RecvMsg(&received); !errors.Is(err, io.EOF) && status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected active link to close without receiving another command: %v %s", err, received.Value)
+	}
+	reconnect := openControl(dial())
+	if err := reconnect.RecvMsg(&received); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("deleted Agent certificate accepted on reconnect: %v", err)
+	}
+	if _, err := client.Renew(ctx, identity); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("deleted Agent certificate accepted on renewal: %v", err)
+	}
+	client.StateDir, client.Token = t.TempDir(), pendingToken
+	if _, err := client.Bootstrap(ctx); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("pending Agent token accepted after deletion: %v", err)
 	}
 }
 

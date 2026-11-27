@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -24,6 +25,36 @@ func (s *Server) hosts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getHost(w http.ResponseWriter, r *http.Request) {
 	host, err := s.Store.Host(r.Context(), hostID(r))
 	send(w, r, host, err)
+}
+
+func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
+	ctx, id := r.Context(), hostID(r)
+	unlock, err := s.lockHostMode(ctx, id)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	defer unlock()
+	connectionType, err := s.Store.DeleteHost(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrLocalHostProtected):
+		problem(w, r, 409, "HOST_LOCAL_PROTECTED", "The built-in Host cannot be deleted.")
+	case errors.Is(err, store.ErrHostHasWorkspaces):
+		problem(w, r, 409, "HOST_HAS_WORKSPACES", "Delete the Workspaces on this Host first.")
+	case errors.Is(err, store.ErrHostHasPendingOps):
+		problem(w, r, 409, "HOST_HAS_PENDING_OPERATIONS", "Wait for this Host's pending operations to finish, or cancel eligible operations before retrying.")
+	case err != nil:
+		failure(w, r, err)
+	default:
+		if connectionType == "ssh" {
+			if s.SSHHosts != nil {
+				s.SSHHosts.Removed(id)
+			}
+		} else if s.DisconnectAgent != nil {
+			s.DisconnectAgent(id)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func (s *Server) hostCapacity(w http.ResponseWriter, r *http.Request) {

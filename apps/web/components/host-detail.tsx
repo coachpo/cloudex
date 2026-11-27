@@ -5,22 +5,62 @@ import { hostName, localizeSSHMessage, type MessageKey } from "@/lib/i18n";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, Clock, Container, Info, KeyRound, Layers, Plus, RadioTower, RotateCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Empty, Facts, Loading, MetaItem, Meter, Notice, PageHeader, Status } from "./shared";
 import { HostEnrollmentPanel } from "./host-enrollment";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "./ui/field";
-import { api, byteSize, canPlaceOnHost, change, GiB, hostImageReady, hostListQuery, hostPath, hostQuery, hostReady, hostResourceFields, hostWorkspacePath, mutationOutcomeUnknown, saveSetting, settingsQuery, stamp, wsPath,
+import { APIError, api, byteSize, canPlaceOnHost, change, GiB, hostImageReady, hostListQuery, hostPath, hostQuery, hostReady, hostResourceFields, hostWorkspacePath, mutationOutcomeUnknown, saveSetting, settingsQuery, stamp, wsPath,
   type Host, type HostScheduling, type HostContainer, type Image } from "@/lib/api";
+
+function hostMissing(error: unknown) {
+  return error instanceof APIError && error.status === 404 && error.code === "NOT_FOUND";
+}
 
 export function HostDetail({ id }: { id: string }) {
   const { locale, t } = useT();
   const client = useQueryClient();
-  const host = useQuery(hostQuery(id));
+  const path = hostPath(id);
+  const forgetHost = useCallback(async () => {
+    const queryKey = hostListQuery.queryKey;
+    await client.cancelQueries({ queryKey, exact: true });
+    client.setQueryData<Host[]>(queryKey, current => current?.filter(item => item.id !== id));
+    for (const key of ["host", "host-capacity", "host-containers", "host-images"]) {
+      client.removeQueries({ queryKey: [key, id], exact: true });
+    }
+    void client.invalidateQueries({ queryKey, exact: true });
+  }, [client, id]);
+  const removal = useMutation({
+    mutationFn: async ({ action }: { action: "delete" | "check"; name: string }): Promise<"removed" | "present" | "unconfirmed"> => {
+      if (action === "delete") {
+        try {
+          if (await change<unknown>(path, "DELETE") === undefined) return "removed";
+        } catch (error) {
+          if (hostMissing(error)) return "removed";
+          if (!(error instanceof Error) || !mutationOutcomeUnknown(error)) throw error;
+        }
+      }
+      try {
+        // This request must start after the DELETE outcome is known to be uncertain.
+        const current = await api<Host>(path);
+        return current?.id === id ? "present" : "unconfirmed";
+      } catch (error) {
+        return hostMissing(error) ? "removed" : "unconfirmed";
+      }
+    },
+    onSuccess: async outcome => {
+      if (outcome === "removed") await forgetHost();
+    },
+  });
+  const [removedByPoll, setRemovedByPoll] = useState(false);
+  const removed = removal.data === "removed" || removedByPoll;
+  const host = useQuery({ ...hostQuery(id), enabled: !removed });
+  const missing = hostMissing(host.error);
+  const pollConfirmedRemoval = missing && removal.variables !== undefined;
   const reconnect = useMutation({
-    mutationFn: () => change<Host>(hostPath(id) + "/ssh/reconnect", "POST"),
+    mutationFn: () => change<Host>(path + "/ssh/reconnect", "POST"),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: hostQuery(id).queryKey, exact: true });
       void client.invalidateQueries({ queryKey: hostListQuery.queryKey });
@@ -30,9 +70,31 @@ export function HostDetail({ id }: { id: string }) {
   const [issuing, setIssuing] = useState(false);
   const enrollmentTrigger = useRef<HTMLButtonElement>(null);
   const hostTitle = useRef<HTMLHeadingElement>(null);
-  const info = host.data;
+  const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const removalAction = removal.variables?.action;
+  useEffect(() => {
+    if (pollConfirmedRemoval && !removed) {
+      // Keep the receipt visible after evicting the query that confirmed it.
+      setRemovedByPoll(true);
+      void forgetHost();
+    }
+  }, [forgetHost, pollConfirmedRemoval, removed]);
+  const showRemovalReceipt = removed || pollConfirmedRemoval;
+  useEffect(() => {
+    if (showRemovalReceipt) hostTitle.current?.focus();
+  }, [showRemovalReceipt]);
+  useEffect(() => {
+    if (removal.data === "present" && removalAction === "check") deleteTrigger.current?.focus();
+  }, [removal.data, removalAction]);
+  if (showRemovalReceipt && removal.variables) {
+    return <PageHeader titleRef={hostTitle} title={t("hostRemoved", { name: removal.variables.name })}
+      actions={<Button asChild variant="outline"><Link href="/hosts">{t("viewHosts")}</Link></Button>}/>;
+  }
+  const info = missing ? undefined : host.data;
   const image = settings.data?.workspace_image;
   const kind = info ? info.id === "local" ? t("controlPlaneHost") : info.connection_type === "ssh" ? t("sshDirect") : t("remoteHost") : "";
+  const removalBlocked = removal.isPending || removal.data === "unconfirmed";
+  const checkingRemoval = removal.isPending && removalAction === "check";
   return <>
     <PageHeader crumbs={[{ href: "/hosts", label: t("hosts") }]} current={info ? hostName(t, info) : undefined}
       titleRef={hostTitle} title={info ? hostName(t, info) : t("host")} status={info && <Status state={info.status}/>}
@@ -56,7 +118,34 @@ export function HostDetail({ id }: { id: string }) {
         {image && canPlaceOnHost(info, image) && <Button asChild><Link href={hostWorkspacePath("/workspaces/new", id)}>
           <Plus data-icon="inline-start"/>{t("newWorkspace")}
         </Link></Button>}
+        {info.id !== "local" && <AlertDialog>
+          <AlertDialogTrigger asChild><Button ref={deleteTrigger} type="button" variant="destructive" aria-disabled={removalBlocked}
+            className="aria-disabled:opacity-50" onClick={event => { if (removalBlocked) event.preventDefault(); }}>
+            {t(removal.isPending && removalAction === "delete" ? "deletingHost" : "deleteHost")}
+          </Button></AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("deleteHostTitle", { name: hostName(t, info) })}</AlertDialogTitle>
+              <AlertDialogDescription>{t("deleteHostEffects")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("keepHost")}</AlertDialogCancel>
+              <AlertDialogAction variant="danger" disabled={removalBlocked}
+                onClick={() => removal.mutate({ action: "delete", name: hostName(t, info) })}>{t("deleteHost")}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>}
       </>}/>
+    {removal.error && <Notice error={removal.error}/>}
+    {removal.data === "present" && <p className="notice info" role="status">{t("hostStillRegistered")}</p>}
+    {(removal.data === "unconfirmed" || checkingRemoval) && removal.variables && <div className="notice">
+      <CircleAlert aria-hidden="true"/>
+      <p className="notice-body" role="alert">{t("hostRemovalUnconfirmed")}</p>
+      <Button type="button" variant="outline" size="xs" aria-disabled={checkingRemoval}
+        className="aria-disabled:opacity-50" onClick={() => {
+          if (!checkingRemoval && removal.variables) removal.mutate({ action: "check", name: removal.variables.name });
+        }}>{t(checkingRemoval ? "checkingHostRemoval" : "checkHostRemoval")}</Button>
+    </div>}
     {host.error && <Notice error={host.error} retry={() => host.refetch()}/>}
     {reconnect.error && <Notice error={reconnect.error}/>}
     {reconnect.isSuccess && (info?.status === "offline" || info?.status === "degraded") && info.scheduling_state !== "disabled" &&

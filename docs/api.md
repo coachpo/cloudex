@@ -10,7 +10,7 @@
 |---|---|
 | 初始化、登录、会话和修改账号 | [账号和 Cookie](../apps/api/internal/httpapi/auth.go) |
 | 默认镜像和接入地址 | [控制面设置](../apps/api/internal/httpapi/settings.go) |
-| Host 登记、凭据更新、调度状态、盘点、容量和并发 | [Host 接口](../apps/api/internal/httpapi/hosts.go)、[SSH 直连接口](../apps/api/internal/httpapi/ssh_hosts.go)与[Host 状态](../apps/api/internal/store/hosts.go) |
+| Host 登记、删除、凭据更新、调度状态、盘点、容量和并发 | [Host 接口](../apps/api/internal/httpapi/hosts.go)、[删除 Host](#删除-host)、[SSH 直连接口](../apps/api/internal/httpapi/ssh_hosts.go)与[Host 状态](../apps/api/internal/store/hosts.go) |
 | Codex 授权、Workspace 绑定和实例凭据 | [管理 API 源码](../apps/api/internal/httpapi/grants.go) · [授权和绑定](#codex-授权和绑定) · [推理请求](#workspace-推理网关) |
 | Workspace 创建、放置、操作回执、历史、日志、指标与 Git | [Workspace 接口](../apps/api/internal/httpapi/workspaces.go)与[生命周期契约](workspace-lifecycle.md) |
 | 管理员公钥与 Workspace 连接信息 | [公钥接口](../apps/api/internal/httpapi/ssh.go)与[SSH 接入契约](workspace-access.md#ssh-接入信息) |
@@ -22,6 +22,24 @@ SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤�
 SSH 主机名和 Agent 公开地址一起提交，空字符串清除对应设置。SSH 配置在主机名为空时使用绑定地址，新签发的注册材料使用当前 Agent 公开地址。默认工作镜像的修改立即适用于模板和新建的 Workspace。Host 可以报告多个镜像的放置就绪状态，实际 Docker 镜像清单另行查询。[默认工作镜像](operations.md#默认工作镜像)
 
 Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。容量变更保留已有预留，并发调整保留在途操作。新的派发受管理员设定值和最近一次生效值中较小者约束。[磁盘预留](operations.md#主机磁盘预留容量) · [操作并发](operations.md#主机操作并发上限)
+
+## 删除 Host
+
+`DELETE /api/v1/hosts/{host}` 按 ID 移除远程 Agent 或 SSH 直连 Host 的登记，无需请求体。适用通常的 `Origin` 和管理员会话校验，不符时分别返回 `403` 和 `401`。
+
+| 响应 | 含义 |
+|---|---|
+| `204` | 登记已删除。Host 从列表和 Workspace 放置选项消失，旧 Agent 令牌和证书失效，保存的 SSH 登录凭据被清除，管理连接关闭。 |
+| `404 NOT_FOUND` | Host ID 不存在或登记已经移除。 |
+| `409 HOST_LOCAL_PROTECTED` | 内置 `local` 不可移除。 |
+| `409 HOST_HAS_PENDING_OPERATIONS` | Host 上仍有 `queued` 或 `running` 操作，包括已派发、结果待确认后重新排队的操作。 |
+| `409 HOST_HAS_WORKSPACES` | Host 上仍有未删除的 Workspace，无论其运行状态如何。 |
+
+连接和调度状态不影响删除资格。删除会清除该 Host 的登记令牌、容量和镜像就绪缓存，以及归属它的已删除 Workspace。清除范围包括这些 Workspace 的容器记录、操作历史、幂等记录、预留和专属凭据。其他 Host、全局设置和共享 Codex 授权均保留。远端机器、Agent 部署和 Docker 资源均保留。
+
+原操作 ID 查询返回 `404`，原 Workspace 的操作列表返回空数组，原幂等键无法取回已删除的操作。名称可用于新的 Agent 或 SSH 登记，新登记获得新的 Host ID。登记名称必须唯一，比较时忽略 ASCII 字母的大小写。
+
+依赖冲突或删除事务失败时，原登记、管理连接及关联记录均保留。响应丢失时，可通过 `GET /api/v1/hosts/{host}` 核对登记是否仍存在。
 
 ## SSH 直连 Host
 

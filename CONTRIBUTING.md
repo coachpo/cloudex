@@ -65,10 +65,10 @@
 
 ```sh
 docker build -f docker/Dockerfile.workspace -t cloudex/workspace:codex-0.172.0 .
-(cd apps/api && CLOUDEX_TEST_DOCKER=1 go test -v ./internal/httpapi -run '^TestDockerWorkspaceLifecycle$')
+(cd apps/api && CLOUDEX_TEST_DOCKER=1 go test -v ./internal/httpapi -run '^TestDocker(WorkspaceLifecycle|HostRemovalPreservesVolumes)$')
 ```
 
-[生命周期验收](apps/api/internal/httpapi/integration_test.go)覆盖实际容器的操作、终端、Git 和仓库凭据。[SSH 验收](apps/api/internal/httpapi/ssh_integration_test.go)验证双跳登录、跨 Workspace 转发隔离、PTY、App Server、重建后身份和撤销。测试进程须能访问测试 bridge。Docker VM 无法直达 bridge 时，在 bridge 内执行：
+[生命周期验收](apps/api/internal/httpapi/integration_test.go)覆盖实际容器的操作、终端、Git、仓库凭据，以及删除 Host 时对 Workspace 已保留卷的处理。[SSH 验收](apps/api/internal/httpapi/ssh_integration_test.go)验证双跳登录、跨 Workspace 转发隔离、PTY、App Server、重建后身份和撤销。测试进程须能访问测试 bridge。Docker VM 无法直达 bridge 时，在 bridge 内执行：
 
 ```sh
 docker network create cloudex-gateway-test

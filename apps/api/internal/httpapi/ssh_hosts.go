@@ -18,6 +18,7 @@ type sshHostConnections interface {
 	Validate(context.Context, hostssh.Config) error
 	Changed(string)
 	Retry(string)
+	Removed(string)
 }
 
 func validSSHAddress(address string) bool {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -614,6 +615,95 @@ printf 'after\n' > tracked.txt`) {
 		if _, err := docker.VolumeInspect(ctx, volume, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
 			t.Fatalf("Purge did not remove volume %q: %v", volume, err)
 		}
+	}
+}
+
+func TestDockerHostRemovalPreservesVolumes(t *testing.T) {
+	if os.Getenv("CLOUDEX_TEST_DOCKER") != "1" {
+		t.Skipf("set CLOUDEX_TEST_DOCKER=1 on a disposable Docker daemon with %s available", store.DefaultWorkspaceImage)
+	}
+	docker, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { docker.Close() })
+	for _, fixture := range []struct {
+		name  string
+		purge bool
+		disk  int64
+	}{
+		{"purged", true, 1024},
+		{"retained", false, 1024},
+		{"retained with zero reservation", false, 0},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			ctx, db := t.Context(), newDB(t)
+			instance, err := db.Instance(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host, _, _ := addDeletionAgent(t, db, "online")
+			engine, err := runtime.NewRemoteDocker(instance, host, func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return docker.Dialer()(ctx)
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { engine.Close() })
+			w := store.Workspace{ID: store.ID(), Name: "Host removal fixture", HostID: host, Image: store.DefaultWorkspaceImage,
+				Branch: "main", CPU: 500, Memory: 512, Disk: fixture.disk, Desired: "stopped"}
+			create, err := db.Create(ctx, w, "", "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.Generation = create.Target
+			spec := control.WorkspaceSpec(w)
+			t.Cleanup(func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := engine.Remove(cleanup, spec); err != nil {
+					t.Error(err)
+				}
+				if err := engine.Purge(cleanup, spec, true); err != nil {
+					t.Error(err)
+				}
+			})
+			container, err := engine.Ensure(ctx, spec)
+			if err != nil || len(container.Mounts) != 2 {
+				t.Fatalf("prepare container with project and SSH volumes: %v, %+v", err, container.Mounts)
+			}
+			if err := db.FinishOp(ctx, create, "stopped", &store.Container{
+				ID: container.ID, Generation: w.Generation, ImageID: container.ImageID, Status: container.State,
+			}, ""); err != nil {
+				t.Fatal(err)
+			}
+			c := &control.Control{Store: db, Engine: engine}
+			workerCtx, stop := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			go func() { done <- c.Run(workerCtx) }()
+			t.Cleanup(func() {
+				stop()
+				if err := <-done; err != nil {
+					t.Error(err)
+				}
+			})
+			a := newTestAPI(t, c)
+			a.login()
+			var deletion acceptance
+			a.call("DELETE", "/workspaces/"+w.ID, map[string]any{"confirm": w.ID, "purge": fixture.purge}, 202, &deletion)
+			a.opDone(deletion.Op)
+			a.call("DELETE", "/hosts/"+host, nil, 204, nil)
+			a.call("GET", "/operations/"+deletion.Op, nil, 404, nil)
+			if _, err := db.WorkspaceReservation(ctx, w.ID); !errors.Is(err, store.ErrMissing) {
+				t.Fatalf("reservation after Host deletion: %v", err)
+			}
+			for _, mount := range container.Mounts {
+				_, err := docker.VolumeInspect(ctx, mount.Name, client.VolumeInspectOptions{})
+				if (fixture.purge && !errdefs.IsNotFound(err)) || (!fixture.purge && err != nil) {
+					t.Fatalf("volume %s after Host removal (purge=%t): %v", mount.Destination, fixture.purge, err)
+				}
+			}
+		})
 	}
 }
 

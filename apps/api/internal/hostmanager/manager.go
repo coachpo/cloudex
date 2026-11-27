@@ -38,6 +38,14 @@ type worker struct {
 	pollNow chan struct{}
 }
 
+// stop is called with the manager lock held so the route cannot change during shutdown.
+func (w *worker) stop() {
+	w.cancel()
+	if w.session != nil {
+		w.session.client.Close()
+	}
+}
+
 type session struct {
 	client *hostssh.Client
 	docker *runtime.Docker
@@ -78,6 +86,20 @@ func (m *Manager) Changed(id string) {
 	m.restartLocked(id)
 }
 
+// Removed stops the SSH worker without replacing it after the registration is deleted.
+func (m *Manager) Removed(id string) {
+	m.mu.Lock()
+	w := m.hosts[id]
+	delete(m.hosts, id)
+	if w != nil {
+		w.stop()
+	}
+	m.mu.Unlock()
+	if w != nil {
+		<-w.done
+	}
+}
+
 // Retry uses the current route rather than the caller's earlier lease snapshot.
 // A degraded Host can still have live terminal and Gateway sessions.
 func (m *Manager) Retry(id string) {
@@ -99,10 +121,7 @@ func (m *Manager) restartLocked(id string) {
 	}
 	old := m.hosts[id]
 	if old != nil {
-		old.cancel()
-		if old.session != nil {
-			old.session.client.Close()
-		}
+		old.stop()
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	w := &worker{cancel: cancel, done: make(chan struct{}), pollNow: make(chan struct{}, 1)}
@@ -213,6 +232,14 @@ func (m *Manager) run(ctx context.Context, id string, w *worker) {
 			if errors.Is(err, hostssh.ErrHostKeyChanged) {
 				return
 			}
+		} else if errors.Is(err, store.ErrMissing) {
+			// Registration may have been removed before its first Changed call.
+			m.mu.Lock()
+			if m.hosts[id] == w {
+				delete(m.hosts, id)
+			}
+			m.mu.Unlock()
+			return
 		} else if ctx.Err() == nil {
 			slog.Warn("read SSH Host", "host", id, "error", err)
 		}

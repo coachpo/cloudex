@@ -72,6 +72,7 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 			r.Post("/hosts/ssh", s.saveSSHHost)
 			r.Route("/hosts/{host}", func(r chi.Router) {
 				r.Get("/", s.getHost)
+				r.Delete("/", s.deleteHost)
 				r.Put("/mode", s.setHostMode)
 				r.Post("/enrollment", s.renewHostEnrollment)
 				r.Put("/ssh", s.saveSSHHost)

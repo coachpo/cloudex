@@ -36,4 +36,6 @@ Create、Start、Rebuild 或 Reset 成功后，新运行实例重新取得凭据
 
 ## 删除与历史
 
-删除后仍可按 Workspace 或操作 ID 查询操作历史。Workspace 详情和容器历史随删除关闭。选择清除卷时，删除操作等待归属 Host 确认卷已清理。
+删除 Workspace 后，操作历史仍可按 Workspace ID 或操作 ID 查询，直到其归属 Host 被删除。Workspace 详情和容器历史随 Workspace 删除关闭。选择清除卷时，删除操作等待归属 Host 确认卷已清理。
+
+删除 Host 会一并清除归属它的已删除 Workspace 及其操作历史。此时原操作 ID 返回 `404`，原 Workspace 的操作列表为空，原幂等键无法取回已清除的操作。此前保留的卷仍留在远端 Docker 上。 [删除 Host](api.md#删除-host)
