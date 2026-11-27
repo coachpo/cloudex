@@ -152,13 +152,26 @@ func run(parent context.Context) error {
 		return e
 	}
 	controller := &control.Control{Store: db, Key: aead, SSH: ssh}
-	grantGateway, callback, callbackExited, e := startGrantGateway(ctx, db, aead, origin)
+	grantSettings, e := readGrantGatewaySettings(origin)
+	if e != nil {
+		return e
+	}
+	grantGateway, callback, callbackExited, e := startGrantGateway(ctx, db, aead, grantSettings)
 	if e != nil {
 		return e
 	}
 	defer grantGateway.Close()
 	if callback != nil {
 		defer callback.Close()
+	}
+	var localGateway *http.Server
+	var localGatewayExited <-chan error
+	if grantSettings.local {
+		localGateway, localGatewayExited, e = serveLocalGateway(ctx, grantGateway.GatewayHandler())
+		if e != nil {
+			return e
+		}
+		defer localGateway.Close()
 	}
 	controller.Gateway = grantGateway
 	agents, e := startAgentServices(ctx, db, instance, aead, controller.SyncConnectedHostSSHKeys)
@@ -215,6 +228,10 @@ func run(parent context.Context) error {
 		if !errors.Is(e, http.ErrServerClosed) {
 			exit = fmt.Errorf("OAuth callback listener: %w", e)
 		}
+	case e := <-localGatewayExited:
+		if !errors.Is(e, http.ErrServerClosed) {
+			exit = fmt.Errorf("local Workspace gateway: %w", e)
+		}
 	case e := <-agents.exited:
 		if !errors.Is(e, http.ErrServerClosed) {
 			exit = fmt.Errorf("Host Agent listener: %w", e)
@@ -227,6 +244,9 @@ func run(parent context.Context) error {
 	_ = srv.Shutdown(stop)
 	if callback != nil {
 		_ = callback.Shutdown(stop)
+	}
+	if localGateway != nil {
+		_ = localGateway.Shutdown(stop)
 	}
 	if workerExited != nil {
 		<-workerExited

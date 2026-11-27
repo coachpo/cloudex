@@ -8,7 +8,7 @@ Cloudex 是自托管的多主机 AI Coding Workspace 平台。管理员选择 Do
 
 ## 启动
 
-准备 Linux Docker Engine 和 Docker Compose v2。macOS 可使用运行 Linux 容器的独立 Docker 环境。Remote SSH 已在标准 rootful Docker 上验证。建议使用 Docker Engine 28 或更新版本，旧版本发布到回环的端口可能被同一二层网络上的其他机器访问。[Docker 端口发布说明](https://docs.docker.com/engine/network/port-publishing/)
+准备 Linux Docker Engine 28+ 和 Docker Compose 2.33.1+。macOS 可使用运行 Linux 容器的独立 Docker 环境。Remote SSH 已在标准 rootful Docker 上验证。默认 Compose 通过 `gw_priority` 将宿主机发布端口保留在控制面的管理网络。[Docker 网络配置](https://docs.docker.com/reference/compose-file/container-spec/#gw_priority)
 
 首次安装且尚无配置时运行以下命令。
 
@@ -29,7 +29,7 @@ docker compose up -d --build
 2. 默认 Compose 通过本机 Agent 接入 Docker。要添加其他机器，可在 **Hosts → Add host** 选择 **SSH 直连**，也可注册由远程机器主动连接控制面的 Agent。见[加入远程 Host](docs/operations.md#加入远程-host)。
 3. 确认 **Hosts** 中目标 Host 在线。在 **New workspace** 选择 Host 和资源，创建空仓库或填写 HTTPS 仓库地址与分支。私有仓库可单独填写凭据。
 4. 在 **设置 → SSH 公钥** 添加客户端公钥，再按[连接步骤](docs/operations.md#通过-ssh-连接-workspace)验证两层主机密钥并打开 `/workspace/project`。也可以在 **Web terminal** 打开 Shell。
-5. 使用托管 Codex 时，先配置容器可访问的 HTTPS 网关，再在设置页添加授权并在 Workspace 设置中绑定。回环登录和容器连通条件见[配置 Codex 网关](docs/operations.md#codex-网关)。
+5. 使用托管 Codex 时，在设置页添加授权，再在 Workspace 设置中绑定。默认 Compose 自动为本机 Host 提供 Docker 私网内的推理入口。远程 Host 的网络配置见 [Codex 网关](docs/operations.md#codex-网关)。
 
 ## 文档
 

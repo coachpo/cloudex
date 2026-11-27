@@ -34,7 +34,10 @@ docker compose exec api cloudex-server reset-admin
 
 ### 配置两条网络路径
 
-- **容器到推理网关。** 将 `CLOUDEX_GATEWAY_ORIGIN` 设为运行容器可解析、可通过受信任 TLS 连接的 HTTPS Origin，例如 `https://gateway.example.net`。留空时使用 HTTPS 控制台 Origin。若控制台也使用 HTTP 回环地址，留空会使推理接入不可用。在反向代理将 `/g/v1/` 原路径转给 Go 控制面。允许 WebSocket 升级和长连接，关闭 SSE 缓冲和代理自动重试。容器须信任证书链。专用网关 Origin 只需转发这组路由。Agent 在线或 SSH 直连成功只说明 Host 管理通路可用，仍须从两类 Host 的工作容器验证 DNS、TLS 和响应流。[配置示例](../.env.example) · [网关接口](api.md#workspace-推理网关)
+- **默认 Compose 的本机 Host。** 使用 HTTP 回环控制台且 `CLOUDEX_GATEWAY_ORIGIN` 留空时，Workspace 在 Docker 私网通过 `http://cloudex-gateway:8081` 直连控制面。该端口只在 Workspace 网络监听，服务 `/g/v1`，不发布到宿主机。控制台、SSH Gateway、Agent 和 OAuth 回调在管理网络监听，沿用各自的宿主机端口绑定。若旧 Compose 的 `gateway` 容器仍在运行，移除该容器以释放 `cloudex-gateway` 网络别名。
+- **自定义入口与远程 Host。** 将 `CLOUDEX_GATEWAY_ORIGIN` 设为所有需要使用托管授权的容器可解析、可通过受信任 TLS 连接的 HTTPS Origin，例如 `https://gateway.example.net`。留空时优先使用 HTTPS 控制台 Origin。自定义入口将 `/g/v1/` 原路径转给 Go 控制面，允许 WebSocket 升级和长连接，关闭 SSE 缓冲和代理自动重试。容器须信任该入口的证书链。远程 Host 需要可达的 HTTPS 入口，不能使用 Compose 的本机网络别名。从工作容器验证 DNS、TLS 和响应流。[配置示例](../.env.example) · [网关接口](api.md#workspace-推理网关)
+
+若只启用了默认 Compose 的本机 HTTP 网关，远程 Host 上的 Workspace 仍可创建并使用 SSH、Git 和 Web Terminal，但新增或更改授权绑定会返回 `gateway_not_configured`。先配置该容器可达且信任的 HTTPS 推理入口，再重试绑定。
 
 控制面需要能直接连接所选上游的 HTTPS 端点。上游 SSE 使用 HTTP/1.1，换绑准入覆盖请求写入连接的时点。入口反向代理只负责容器到控制面的链路。
 - **浏览器到授权回调。** 浏览器回调方式默认使用 `http://127.0.0.1:1455/auth/callback`，Compose 只在控制面宿主回环发布。默认端口已占用时，用 `CLOUDEX_OAUTH_CALLBACK_PORT=1457` 并匹配本地隧道。若浏览器运行在另一台机器上且要自动完成回调，请先在浏览器所在机器运行下列命令。SSH 目的地是控制面宿主，工作容器所在的 Docker Host 无需访问回调端口。[手动提交回调 URL](#手动提交回调-url) · [回环回调转发](https://learn.chatgpt.com/docs/auth#fallback-forward-the-localhost-callback-over-ssh)
@@ -74,6 +77,8 @@ codex exec --skip-git-repo-check --json 'Return CLOUDEX_OK.'
 零保留规则下 SQLite 迁移基线可以重写，已执行的迁移版本不会重跑。控制面数据库来自旧基线时，先按[零保留约定](../CONTRIBUTING.md#兼容与迁移)重新初始化，再登记 Host。
 
 同一 Docker Engine 只登记一次。容量和资源预留按 Host ID 统计，通过不同地址或接入方式重复登记会重复计算可用容量。在目标机[准备工作镜像](#默认工作镜像)后，按网络连接方向选择接入方式。
+
+控制面能 SSH 登录目标 Host 并通过登录账号访问 Docker 时，SSH 直连可以管理 Workspace 和提供 Web Terminal。若目标 Host 的 sshd 禁止向容器转发 TCP，而使用者需要原生 SSH 或 Codex Desktop，可改用 Host Agent。此时要求 Agent 能向控制面建立出站连接，并能访问目标容器的 SSH 端口。
 
 ### SSH 直连
 
@@ -120,7 +125,7 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 
 ## 通过 SSH 连接 Workspace
 
-跨机器访问时，Gateway 可绑定私网或 VPN 地址。使用默认回环地址和端口时，在客户端运行 `ssh -N -L 2222:127.0.0.1:2222 user@docker-host`，保持隧道开启。客户端需要单独的 Gateway 地址时，在 **设置 → 接入地址** 填写 **SSH 主机名**。
+跨机器访问时，可把共享 SSH Gateway 绑定到控制面宿主机的私网或 VPN 地址。使用默认回环绑定时，在客户端运行 `ssh -N -L 127.0.0.1:2222:127.0.0.1:2222 user@control-plane-host` 并保持隧道开启。直接访问私网或 VPN 入口时，在 **设置 → 接入地址** 填写客户端可达的 **SSH 主机名**，再从 Workspace 复制连接配置。
 
 1. 在 **设置 → SSH 公钥** 填入本机 OpenSSH 公钥，每行一把。保存后，公钥立即用于新连接。可在同一处移除公钥。
 2. 启动并等待 **Gateway ready**。将 **Copy known_hosts entries** 的两条公钥加入本机 `~/.ssh/known_hosts`，再把 **Copy SSH config** 的两个 Host 块放在 `~/.ssh/config` 的通用 `Host *` 规则之前。使用非默认私钥时，为两个 Host 块填写同一 `IdentityFile`，或使用 SSH agent。

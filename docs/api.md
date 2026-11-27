@@ -46,7 +46,7 @@ Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。�
 
 | 方法与路径 | 外部契约 |
 |---|---|
-| `GET /grants` | 返回每份授权的渠道、注册、已验证身份、状态及引用它的 Workspace。 |
+| `GET /grants` | 返回控制面已保存的授权渠道、注册、已验证身份、状态及引用它的 Workspace。读取列表不会发起上游查询、令牌刷新或试推理。Workspace 的运行实例就绪状态从绑定接口读取。 |
 | `POST /grant-authorizations` | 提交 `channel`（`codex` 或 `chatgpt`）。重新授权时同时提交 `grant_id`，渠道及预期身份从现有授权确定。默认 `method: "browser"` 返回 `id` 和 `authorization_url`。仅 `codex` 可指定 `method: "device_code"`，返回 `id` 和 `device`，其中含 `verification_url` 与 `user_code`。 |
 | `GET /grant-authorizations/{id}` | 发起授权的管理员会话查询尝试进度。换码和身份校验成功后返回待确认的身份。 |
 | `POST /grant-authorizations/{id}/callback` | 发起浏览器授权的原会话可提交 `{"callback_url":"…"}`。回调地址与 `state` 必须匹配该尝试。与自动回调共享一次性 `state`。换码及身份校验成功返回 `204`，仍须查询待确认身份并确认保存。 |

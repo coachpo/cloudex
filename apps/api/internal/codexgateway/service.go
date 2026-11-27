@@ -18,6 +18,7 @@ type Config struct {
 	Store       *store.Store
 	Key         cipher.AEAD
 	Origin      string
+	LocalOnly   bool
 	RedirectURI string
 	Clients     []*codexupstream.Client
 }
@@ -52,13 +53,14 @@ type workspaceState struct {
 }
 
 type Service struct {
-	Store    *store.Store
-	key      cipher.AEAD
-	origin   string
-	redirect string
-	clients  map[string]*codexupstream.Client
-	ctx      context.Context
-	cancel   context.CancelFunc
+	Store     *store.Store
+	key       cipher.AEAD
+	origin    string
+	localOnly bool
+	redirect  string
+	clients   map[string]*codexupstream.Client
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	mu         sync.Mutex
 	grants     map[string]*grantState
@@ -75,7 +77,8 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Service{
-		Store: cfg.Store, key: cfg.Key, origin: cfg.Origin, redirect: cfg.RedirectURI, ctx: ctx, cancel: cancel,
+		Store: cfg.Store, key: cfg.Key, origin: cfg.Origin, localOnly: cfg.LocalOnly,
+		redirect: cfg.RedirectURI, ctx: ctx, cancel: cancel,
 		clients: make(map[string]*codexupstream.Client), grants: make(map[string]*grantState),
 		workspaces: make(map[string]*workspaceState), active: make(map[*Admission]context.CancelFunc),
 		attempts: make(map[string]*authorizationAttempt), states: make(map[string]string),

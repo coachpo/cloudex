@@ -20,6 +20,10 @@ import (
 
 const gatewayMount = "/run/cloudex"
 
+// The Compose gateway is the only HTTP origin issued to local Workspaces.
+const LocalGatewayAddress = "cloudex-gateway:8081"
+const LocalGatewayOrigin = "http://" + LocalGatewayAddress
+
 type GatewayInstance struct {
 	ContainerID string `json:"docker_id"`
 	StartedAt   string `json:"started_at"`
@@ -105,7 +109,7 @@ func (d *Docker) InstallGatewayCredential(ctx context.Context, spec Spec, instan
 	defer d.classifyOutcome(&err)
 	decoded, decodeErr := base64.RawURLEncoding.DecodeString(install.Token)
 	origin, originErr := url.Parse(install.Origin)
-	if decodeErr != nil || len(decoded) != sha256.Size || originErr != nil || origin.Scheme != "https" || origin.Hostname() == "" ||
+	if decodeErr != nil || len(decoded) != sha256.Size || originErr != nil || (origin.Scheme != "https" && install.Origin != LocalGatewayOrigin) || origin.Hostname() == "" ||
 		origin.User != nil || origin.Opaque != "" || origin.Fragment != "" || origin.ForceQuery || origin.RawQuery != "" ||
 		(strings.TrimSuffix(origin.Path, "/") != "") || install.BindingRevision < 1 || install.GrantEpoch < 1 || install.Sequence < 1 {
 		return confirmation, errors.New("invalid gateway credential installation")

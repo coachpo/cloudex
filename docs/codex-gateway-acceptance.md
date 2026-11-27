@@ -53,6 +53,8 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 
 覆盖 Create、Start、Stop、Rebuild、Reset、Delete、主动轮换、控制面重启、Host 离线和迟到安装确认。每个案例分别记录实际 Docker ID、启动标记、凭据状态及假上游收到的身份和生成次数。旧凭据和连接在相应边界失效。Host 恢复后仅当前实例与绑定获得可用凭据。
 
+验收默认 Compose 时，从工作容器所在网络请求默认推理入口的 `/g/v1/models`。使用无效实例凭据时，应收到 `401 invalid_gateway_credential`，可据此确认 DNS、HTTP 路由和网关鉴权已接通。再检查同一容器无法连接控制台、共享 SSH Gateway、Agent 或 OAuth 回调的管理端口，同时确认这些入口仍可从原先配置的宿主机地址访问，且推理端口未发布到宿主机。需要确认推理时，使用绑定合成授权的实际 Workspace 完成工具往返并收到 `response.completed`。
+
 ## 受控验收记录
 
 固定版原生二进制与隔离 Colima Docker 内的工作镜像均运行 `codex-cli 0.172.0`。原生矩阵 9 项和 Docker 矩阵 10 项均通过。Docker 客户端经真实 tmpfs 安装和 `codex` 启动器，通过 TLS 连接宿主上的 Go 路由。假上游记录如下。[客户端验收源码](../apps/api/cmd/server/gateway_acceptance_test.go)
@@ -75,3 +77,5 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 ## 真实账号验收
 
 真实上游验收需要获授权的本人账号、应用注册和确切操作范围。每个渠道分别验证回调身份、scope、模型目录、同一模型 WS 和 SSE 两格的两次工具往返、终态，以及一次实际刷新。要求专属路由的 Codex workspace 分别验证目录与 Responses 的最终路由。记录上游请求 ID；服务端未回显 workspace 时标为未知。故障和竞态由受控上游提供确定性证据。OpenAI 对部署形态的正式支持独立于以上结果。[公开支持边界](codex-gateway.md#上游公开支持边界)
+
+2026-11-27，合成版 `8427356` 在独立 Colima Docker 环境中使用 `codex-cli 0.172.0` 和 `gpt-6.2-sol` 完成真实账号验收。Sign in with Codex 和 Sign in with ChatGPT 分别通过 WebSocket 和强制 HTTP/SSE 完成两次有依赖的工具往返，四格均收到 `response.completed`。撤销测试中，两渠道上游均确认撤权，原实例凭据随后被网关拒绝。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。

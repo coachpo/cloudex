@@ -13,11 +13,13 @@ import (
 
 	"github.com/coachpo/cloudex/apps/api/internal/codexgateway"
 	"github.com/coachpo/cloudex/apps/api/internal/codexupstream"
+	"github.com/coachpo/cloudex/apps/api/internal/runtime"
 	"github.com/coachpo/cloudex/apps/api/internal/store"
 )
 
 type grantGatewaySettings struct {
 	origin, callbackAddress, redirectURI string
+	local                                bool
 }
 
 func readGrantGatewaySettings(console string) (grantGatewaySettings, error) {
@@ -25,16 +27,19 @@ func readGrantGatewaySettings(console string) (grantGatewaySettings, error) {
 	if origin == "" && strings.HasPrefix(console, "https://") {
 		origin = console
 	}
+	loopback := strings.HasPrefix(console, "http://") && isLoopbackConsole(console)
+	local := origin == "" && loopback && os.Getenv("CLOUDEX_LOCAL_GATEWAY") == "1"
+	if local {
+		origin = runtime.LocalGatewayOrigin
+	}
 	if origin == "" {
 		return grantGatewaySettings{}, nil
 	}
 	origin, err := browserOrigin(origin)
-	if err != nil || !strings.HasPrefix(origin, "https://") {
+	if err != nil || (!local && !strings.HasPrefix(origin, "https://")) {
 		return grantGatewaySettings{}, errors.New("CLOUDEX_GATEWAY_ORIGIN must be an HTTPS origin")
 	}
-	uHost := strings.TrimPrefix(console, "http://")
-	if strings.HasPrefix(console, "http://") && uHost != "localhost" && uHost != "127.0.0.1" && uHost != "[::1]" &&
-		!strings.HasPrefix(uHost, "localhost:") && !strings.HasPrefix(uHost, "127.0.0.1:") && !strings.HasPrefix(uHost, "[::1]:") {
+	if strings.HasPrefix(console, "http://") && !loopback {
 		return grantGatewaySettings{}, errors.New("grant management requires HTTPS or a loopback console")
 	}
 	port := env("CLOUDEX_OAUTH_CALLBACK_PORT", "1455")
@@ -42,18 +47,20 @@ func readGrantGatewaySettings(console string) (grantGatewaySettings, error) {
 		return grantGatewaySettings{}, errors.New("CLOUDEX_OAUTH_CALLBACK_PORT must be 1455 or 1457")
 	}
 	bind := env("CLOUDEX_OAUTH_CALLBACK_BIND", "127.0.0.1")
-	if bind != "127.0.0.1" && bind != "0.0.0.0" {
-		return grantGatewaySettings{}, errors.New("CLOUDEX_OAUTH_CALLBACK_BIND must be 127.0.0.1 or 0.0.0.0 for a container published on loopback")
+	if bind != "127.0.0.1" && bind != "0.0.0.0" && bind != "cloudex-control" {
+		return grantGatewaySettings{}, errors.New("CLOUDEX_OAUTH_CALLBACK_BIND must be 127.0.0.1, 0.0.0.0, or the Compose management alias cloudex-control")
 	}
-	return grantGatewaySettings{origin: origin, callbackAddress: net.JoinHostPort(bind, port),
+	return grantGatewaySettings{origin: origin, local: local, callbackAddress: net.JoinHostPort(bind, port),
 		redirectURI: "http://127.0.0.1:" + port + "/auth/callback"}, nil
 }
 
-func startGrantGateway(ctx context.Context, db *store.Store, key cipher.AEAD, console string) (*codexgateway.Service, *http.Server, <-chan error, error) {
-	settings, err := readGrantGatewaySettings(console)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+func isLoopbackConsole(console string) bool {
+	host := strings.TrimPrefix(console, "http://")
+	return host == "localhost" || host == "127.0.0.1" || host == "[::1]" ||
+		strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") || strings.HasPrefix(host, "[::1]:")
+}
+
+func startGrantGateway(ctx context.Context, db *store.Store, key cipher.AEAD, settings grantGatewaySettings) (*codexgateway.Service, *http.Server, <-chan error, error) {
 	var clients []*codexupstream.Client
 	for _, cfg := range []codexupstream.Config{codexupstream.OpenAICodexConfig(), codexupstream.ChatGPTConfig()} {
 		client, err := codexupstream.New(cfg)
@@ -63,7 +70,7 @@ func startGrantGateway(ctx context.Context, db *store.Store, key cipher.AEAD, co
 		clients = append(clients, client)
 	}
 	service, err := codexgateway.New(ctx, codexgateway.Config{
-		Store: db, Key: key, Origin: settings.origin, RedirectURI: settings.redirectURI, Clients: clients,
+		Store: db, Key: key, Origin: settings.origin, LocalOnly: settings.local, RedirectURI: settings.redirectURI, Clients: clients,
 	})
 	if err != nil {
 		return nil, nil, nil, err

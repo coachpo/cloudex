@@ -38,6 +38,16 @@ func (s *Service) Binding(ctx context.Context, id string) (BindingView, error) {
 		view.Reason = errDisabled.Code
 		return view, nil
 	}
+	if s.localOnly {
+		w, err := s.Store.Workspace(ctx, id)
+		if err != nil {
+			return view, err
+		}
+		if !s.gatewayAvailableOn(w.HostID) {
+			view.Reason = errDisabled.Code
+			return view, nil
+		}
+	}
 	ws := s.workspaceState(id)
 	ws.fence.RLock()
 	defer ws.fence.RUnlock()
@@ -55,8 +65,12 @@ type bindingPreflight struct {
 	epoch, tokenVersion int64
 }
 
-func (s *Service) preflight(ctx context.Context, id string) (bindingPreflight, error) {
-	if s.origin == "" {
+func (s *Service) gatewayAvailableOn(host string) bool {
+	return s.origin != "" && (!s.localOnly || host == store.LocalHostID)
+}
+
+func (s *Service) preflight(ctx context.Context, id string, host string) (bindingPreflight, error) {
+	if !s.gatewayAvailableOn(host) {
 		return bindingPreflight{}, errDisabled
 	}
 	g, err := s.Store.Grant(ctx, id)
@@ -98,7 +112,15 @@ func (s *Service) SetBinding(ctx context.Context, workspaceID, grantID string, e
 	}
 	var checked bindingPreflight
 	if grantID != "" && grantID != b.GrantID {
-		checked, err = s.preflight(ctx, grantID)
+		var host string
+		if s.localOnly {
+			w, err := s.Store.Workspace(ctx, workspaceID)
+			if err != nil {
+				return b, err
+			}
+			host = w.HostID
+		}
+		checked, err = s.preflight(ctx, grantID, host)
 		if err != nil {
 			return b, err
 		}
@@ -132,7 +154,11 @@ func (s *Service) CreateWorkspace(ctx context.Context, w store.Workspace, key, h
 	if op, err := s.Store.IdempotentOperation(ctx, key, hash); !errors.Is(err, store.ErrMissing) {
 		return op, err
 	}
-	checked, err := s.preflight(ctx, grantID)
+	host := w.HostID
+	if host == "" {
+		host = store.LocalHostID
+	}
+	checked, err := s.preflight(ctx, grantID, host)
 	if err != nil {
 		if op, replayErr := s.Store.IdempotentOperation(ctx, key, hash); !errors.Is(replayErr, store.ErrMissing) {
 			return op, replayErr
@@ -197,7 +223,7 @@ func (s *Service) SuspendGateway(_ context.Context, id string) error {
 }
 
 func (s *Service) ReconcileGateway(ctx context.Context, w store.Workspace, info runtime.Container, host runtime.GatewayCredentialRuntime) error {
-	if s.origin == "" {
+	if !s.gatewayAvailableOn(w.HostID) {
 		return nil
 	}
 	if info.State != "running" || info.ID == "" || info.StartedAt == "" {
@@ -258,7 +284,8 @@ func (s *Service) ReconcileGateway(ctx context.Context, w store.Workspace, info 
 	ws.fence.Unlock()
 
 	confirmation, err = host.InstallGatewayCredential(ctx, spec, instance, runtime.GatewayCredentialInstall{
-		Token: token, Origin: s.origin, BindingRevision: pending.BindingRevision, GrantEpoch: pending.GrantEpoch, Sequence: pending.Sequence,
+		Token: token, Origin: s.origin,
+		BindingRevision: pending.BindingRevision, GrantEpoch: pending.GrantEpoch, Sequence: pending.Sequence,
 	})
 	if err != nil {
 		return err
@@ -271,7 +298,8 @@ func (s *Service) ReconcileGateway(ctx context.Context, w store.Workspace, info 
 
 func (s *Service) matchesConfirmation(cred store.GatewayCredential, confirmation runtime.GatewayCredentialConfirmation) bool {
 	return cred.Digest == confirmation.Digest && cred.Sequence == confirmation.Sequence && cred.StartedAt == confirmation.StartedAt &&
-		cred.BindingRevision == confirmation.BindingRevision && cred.GrantEpoch == confirmation.GrantEpoch && s.origin == confirmation.Origin
+		cred.BindingRevision == confirmation.BindingRevision && cred.GrantEpoch == confirmation.GrantEpoch &&
+		s.origin == confirmation.Origin
 }
 
 func (s *Service) confirmInstallation(ctx context.Context, ws *workspaceState, verification uint64, cred store.GatewayCredential) error {

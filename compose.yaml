@@ -4,20 +4,21 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
     environment:
-      CLOUDEX_ADDR: 0.0.0.0:8080
+      CLOUDEX_ADDR: cloudex-control:8080
       CLOUDEX_WEB_URL: http://web:3000
       CLOUDEX_ORIGIN: ${CLOUDEX_ORIGIN:-http://localhost:${CLOUDEX_PORT:-3000}}
       CLOUDEX_MASTER_KEY: ${CLOUDEX_MASTER_KEY:?Set CLOUDEX_MASTER_KEY in .env}
       CLOUDEX_DB_PATH: /data/cloud.sqlite
       CLOUDEX_SSH_BIND: ${CLOUDEX_SSH_BIND:-127.0.0.1}
       CLOUDEX_SSH_PORT: ${CLOUDEX_SSH_PORT:-2222}
-      CLOUDEX_GATEWAY_ADDR: 0.0.0.0:2222
+      CLOUDEX_GATEWAY_ADDR: cloudex-control:2222
       CLOUDEX_SSH_NETWORK: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
-      CLOUDEX_AGENT_LISTEN: 0.0.0.0:9443
+      CLOUDEX_AGENT_LISTEN: cloudex-control:9443
       CLOUDEX_AGENT_BOOTSTRAP_SOCKET: /bootstrap/enroll.sock
       CLOUDEX_GATEWAY_ORIGIN: ${CLOUDEX_GATEWAY_ORIGIN:-}
+      CLOUDEX_LOCAL_GATEWAY: "1"
       CLOUDEX_OAUTH_CALLBACK_PORT: ${CLOUDEX_OAUTH_CALLBACK_PORT:-1455}
-      CLOUDEX_OAUTH_CALLBACK_BIND: 0.0.0.0
+      CLOUDEX_OAUTH_CALLBACK_BIND: cloudex-control
     volumes:
       - cloud-db:/data
       - agent-bootstrap:/bootstrap
@@ -26,12 +27,19 @@ services:
       - "${CLOUDEX_SSH_BIND:-127.0.0.1}:${CLOUDEX_SSH_PORT:-2222}:2222"
       - "${CLOUDEX_AGENT_BIND:-127.0.0.1}:${CLOUDEX_AGENT_PORT:-9443}:9443"
       - "127.0.0.1:${CLOUDEX_OAUTH_CALLBACK_PORT:-1455}:${CLOUDEX_OAUTH_CALLBACK_PORT:-1455}"
+    networks:
+      default:
+        # Docker forwards published ports to the default-gateway interface.
+        gw_priority: 1
+        aliases: [cloudex-control]
+      workspaces:
+        aliases: [cloudex-gateway]
     depends_on:
       - web
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://cloudex-control:8080/healthz"]
       interval: 15s
       start_period: 5s
       start_interval: 1s
@@ -44,7 +52,7 @@ services:
       dockerfile: docker/Dockerfile.api
       target: agent
     environment:
-      CLOUDEX_AGENT_ADDRESS: api:9443
+      CLOUDEX_AGENT_ADDRESS: cloudex-control:9443
       CLOUDEX_AGENT_BOOTSTRAP_SOCKET: /bootstrap/enroll.sock
       CLOUDEX_AGENT_STATE_DIR: /agent
       CLOUDEX_SSH_NETWORK: ${CLOUDEX_SSH_NETWORK:-cloudex-workspaces}
