@@ -37,17 +37,17 @@ docker compose exec api cloudex-server reset-admin
 - **容器到推理网关。** 将 `CLOUDEX_GATEWAY_ORIGIN` 设为运行容器可解析、可通过受信任 TLS 连接的 HTTPS Origin，例如 `https://gateway.example.net`。留空时使用 HTTPS 控制台 Origin。若控制台也使用 HTTP 回环地址，留空会使推理接入不可用。在反向代理将 `/g/v1/` 原路径转给 Go 控制面。允许 WebSocket 升级和长连接，关闭 SSE 缓冲和代理自动重试。容器须信任证书链。专用网关 Origin 只需转发这组路由。Agent 在线或 SSH 直连成功只说明 Host 管理通路可用，仍须从两类 Host 的工作容器验证 DNS、TLS 和响应流。[配置示例](../.env.example) · [网关接口](api.md#workspace-推理网关)
 
 控制面需要能直接连接所选上游的 HTTPS 端点。上游 SSE 使用 HTTP/1.1，换绑准入覆盖请求写入连接的时点。入口反向代理只负责容器到控制面的链路。
-- **浏览器到授权回调。** 回调固定使用 `http://127.0.0.1:1455/auth/callback`，Compose 只在控制面宿主回环发布。默认端口已占用时，用 `CLOUDEX_OAUTH_CALLBACK_PORT=1457` 并匹配本地隧道。浏览器和控制面不在同一台机器时，先从浏览器所在机器运行下列命令，再发起授权。SSH 目的地是控制面宿主，工作容器所在的 Docker Host 无需访问回调端口。[回环回调转发](https://learn.chatgpt.com/docs/auth#fallback-forward-the-localhost-callback-over-ssh)
+- **浏览器到授权回调。** 浏览器回调方式默认使用 `http://127.0.0.1:1455/auth/callback`，Compose 只在控制面宿主回环发布。默认端口已占用时，用 `CLOUDEX_OAUTH_CALLBACK_PORT=1457` 并匹配本地隧道。若浏览器运行在另一台机器上且要自动完成回调，请先在浏览器所在机器运行下列命令。SSH 目的地是控制面宿主，工作容器所在的 Docker Host 无需访问回调端口。[手动提交回调 URL](#手动提交回调-url) · [回环回调转发](https://learn.chatgpt.com/docs/auth#fallback-forward-the-localhost-callback-over-ssh)
 
 ```sh
 ssh -N -L 127.0.0.1:1455:127.0.0.1:1455 user@control-plane-host
 ```
 
-两条路径中的代理、接入日志和追踪均应排除凭据。回调路径不得记录查询字符串，网关不得记录 Authorization、Cookie、提示词、流正文或工具参数。网关用内部 Workspace、授权、传输、阶段、请求 ID、终态和实际返回的用量排查问题。
+两条路径中的代理、接入日志和追踪均应排除凭据。自动回调不得记录查询字符串，手动提交回调的 API 不得采集请求体。网关不得记录 Authorization、Cookie、提示词、流正文或工具参数。网关用内部 Workspace、授权、传输、阶段、请求 ID、终态和实际返回的用量排查问题。
 
 ### 添加授权和绑定 Workspace
 
-1. 在 **设置 → Codex 授权** 选择 **Sign in with Codex** 或 **Sign in with ChatGPT**。在 OpenAI 页面使用自己的账号。回调成功后回到控制台，核对并确认账号和上游 workspace 或应用注册。ChatGPT 登录成功但未授予套餐推理权限时，按授权行提示对同一注册重新授权。
+1. 在 **设置 → Codex 授权** 选择 **Sign in with Codex** 或 **Sign in with ChatGPT**。浏览器回调不可达时，Codex 可选 **Device Code**，前提是个人账号或所在的 ChatGPT workspace 已启用设备码登录。在 Cloudex 发起后打开 OpenAI 验证链接并输入一次性用户码。控制面通过 HTTPS 轮询与换码，管理员电脑无需回环监听或 SSH 隧道。完成任一方式后，回到发起授权的控制台会话，核对并确认账号及适用的 workspace 或应用注册。ChatGPT 若未授予套餐推理权限，按授权行提示对同一注册重新授权。[Codex 设备码启用条件](https://learn.chatgpt.com/docs/auth#preferred-device-code-authentication-beta) · [上游公开支持边界](codex-gateway.md#上游公开支持边界)
 2. 在 **Workspace → 设置** 选择一份授权。打开 Codex 前等待实例凭据就绪。换绑或轮换后重新启动客户端进程，Codex Desktop 需要重新连接 App Server。换绑后已发给旧上游的请求可能仍在执行。
 3. 从工作容器的 Shell 执行 `codex --version` 核对实际运行的版本。交互 `codex`、`codex exec` 和 `codex app-server` 使用工作镜像的启动入口读取当前绑定的模型配置。使用 `-m` 时选择当前目录中的模型 slug。固定版本和镜像构建入口见[工作镜像](../docker/Dockerfile.workspace)。
 
@@ -56,6 +56,10 @@ codex exec --skip-git-repo-check --json 'Return CLOUDEX_OK.'
 ```
 
 在固定客户端与受控假上游中验收协议和转发，再分别按两种渠道的[公开支持边界](codex-gateway.md#上游公开支持边界)核实真实环境。登录、模型目录、建立连接、完成工具往返和最终 `response.completed` 各自对应不同验证阶段。[验收矩阵](codex-gateway-acceptance.md)
+
+#### 手动提交回调 URL
+
+两种浏览器登录均可使用。先在 Cloudex 发起授权并在 OpenAI 完成登录。若跳转到 `127.0.0.1` 后浏览器显示无法连接，从地址栏复制完整 URL，回到发起授权的控制台，选择 **手动提交回调 URL**，粘贴并提交，再核对身份并确认保存。管理员电脑无需监听回环端口或建立 SSH 隧道。此入口使用原授权的 `redirect_uri`，OpenAI 对两条渠道的手动提交方式的正式支持均未确认。
 
 ### 恢复授权与凭据
 

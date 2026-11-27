@@ -101,9 +101,7 @@ func grantCallback(service *codexgateway.Service, expectedHost string) http.Hand
 				return
 			}
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		defer cancel()
-		if err := service.CompleteAuthorization(ctx, q.Get("state"), q.Get("code"), q.Get("client_id"), q.Get("error")); err != nil {
+		if err := service.CompleteAuthorization(r.Context(), q.Get("state"), q.Get("code"), q.Get("client_id"), q.Get("error")); err != nil {
 			http.Error(w, "Sign-in did not complete. Return to the Cloudex console for details.", http.StatusBadRequest)
 			return
 		}

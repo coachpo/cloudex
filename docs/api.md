@@ -47,8 +47,10 @@ Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。�
 | 方法与路径 | 外部契约 |
 |---|---|
 | `GET /grants` | 返回每份授权的渠道、注册、已验证身份、状态及引用它的 Workspace。 |
-| `POST /grant-authorizations` | 提交 `channel`（`codex` 或 `chatgpt`）。重新授权时同时提交 `grant_id`，渠道及预期身份从现有授权确定。返回尝试 ID 与授权 URL。 |
+| `POST /grant-authorizations` | 提交 `channel`（`codex` 或 `chatgpt`）。重新授权时同时提交 `grant_id`，渠道及预期身份从现有授权确定。默认 `method: "browser"` 返回 `id` 和 `authorization_url`。仅 `codex` 可指定 `method: "device_code"`，返回 `id` 和 `device`，其中含 `verification_url` 与 `user_code`。 |
 | `GET /grant-authorizations/{id}` | 发起授权的管理员会话查询尝试进度。换码和身份校验成功后返回待确认的身份。 |
+| `POST /grant-authorizations/{id}/callback` | 发起浏览器授权的原会话可提交 `{"callback_url":"…"}`。回调地址与 `state` 必须匹配该尝试。与自动回调共享一次性 `state`。换码及身份校验成功返回 `204`，仍须查询待确认身份并确认保存。 |
+| `DELETE /grant-authorizations/{id}` | 发起会话取消未过期的设备码尝试并停止轮询。成功返回 `204`。 |
 | `POST /grant-authorizations/{id}/confirm` | 发起会话核对身份后确认。添加已有授权或为原授权误选另一身份会报错，现有授权与绑定保持原值。 |
 | `POST /grants/{id}/disconnect` | 本地撤销该授权使用权，按原渠道尝试远端撤权。回读状态区分远端确认与结果未知。 |
 | `DELETE /grants/{id}` | 删除无引用授权。有引用时返回 `409` 和受影响 Workspace。 |
@@ -59,7 +61,7 @@ Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。�
 
 创建 Workspace 时可在 `POST /workspaces` 中提供 `grant_id`，由放置请求一起保存初始绑定。省略时可在 Workspace 创建后绑定。[创建接口](../apps/api/internal/httpapi/workspaces.go)
 
-重试已生效的绑定目标会返回当前绑定。带有旧版本且会改变目标的请求返回版本冲突。换绑成功时旧实例凭据不能再使用。回环监听器接收 `GET /auth/callback`，按一次性 `state` 匹配渠道和授权尝试。待确认结果只能由最初的管理员会话读取和保存。[回环网络](operations.md#配置两条网络路径) · [身份与刷新契约](codex-gateway.md#授权身份和刷新)
+重试已生效的绑定目标会返回当前绑定。带有旧版本且会改变目标的请求返回版本冲突。换绑成功时旧实例凭据不能再使用。回环监听器接收 `GET /auth/callback`，按一次性 `state` 匹配渠道和授权尝试。设备码尝试在控制面轮询，最长有效 15 分钟。两种方式的待确认结果都只能由最初的管理员会话读取和保存。[回环网络](operations.md#配置两条网络路径) · [身份与刷新契约](codex-gateway.md#授权身份和刷新)
 
 ## Workspace 推理网关
 

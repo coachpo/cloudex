@@ -20,6 +20,10 @@ async page => {
     subject: "chatgpt-subject", client_id: "issued-fixture-client",
     status: "active", workspaces: [], grant_epoch: 1,
   };
+  const deviceGrant = { ...a, id: "c", display_name: "Test Device Code", subject: "device-subject",
+    upstream_user_id: "test-device-user", workspaces: [] };
+  const manualCodexGrant = { ...a, id: "d", display_name: "Test Pasted Callback", subject: "manual-subject",
+    upstream_user_id: "test-manual-user", workspaces: [] };
   const fixtures = {
     "/auth/session": { username: "fixture" },
     "/settings": { workspace_image: "workspace:fixture", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" },
@@ -33,6 +37,15 @@ async page => {
   const grants = [a];
   let binding = { workspace_id: w1.id, grant_id: a.id, binding_revision: 8, readiness: "ready" };
   let started, attemptNumber = 0, callbackReturned = false, confirmed = 0, revoked = 0, rotated = 0, removed = 0;
+  let deviceConfirmed = 0, deviceCancelled = 0;
+  let expireOnConfirm = false, confirmationExpired = false;
+  const expiringIdentityName = "Identity awaiting an expired save";
+  let manualResult;
+  const manualConfirmed = [];
+  const manualURLs = {
+    codex: "http://127.0.0.1:1455/auth/callback?code=codex-fixture-code&state=codex-fixture-state",
+    chatgpt: "http://127.0.0.1:1455/auth/callback?code=chatgpt-fixture-code&state=chatgpt-fixture-state&client_id=issued-fixture-client",
+  };
   let conflict = true;
   const requestedRevisions = [];
   const expect = (condition, message) => { if (!condition) throw new Error(message); };
@@ -40,9 +53,20 @@ async page => {
   const fail = (route, status, code, message, details) => route.fulfill({ status, json: { error: { code, message, details } } });
   const context = page.context();
   const provider = origin + "/fake-provider-login";
+  const verification = "https://auth.openai.com/codex/device";
+  const userCode = "TEST-1234";
   await context.route(provider, route => {
     callbackReturned = true;
     return route.fulfill({ body: "Local OAuth fixture" });
+  });
+  await context.route(verification, route => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      callbackReturned = new URLSearchParams(request.postData()).get("user_code") === userCode;
+      return route.fulfill({ body: callbackReturned ? "Device authorization accepted" : "Device code rejected" });
+    }
+    return route.fulfill({ contentType: "text/html", body: `<!doctype html><title>Device verification fixture</title>
+      <form method="post"><label>Enter the user code <input name="user_code"></label><button>Authorize</button></form>` });
   });
   const pattern = base + "/**";
   await context.route(pattern, route => {
@@ -52,18 +76,52 @@ async page => {
     if (path === "/grant-authorizations" && request.method() === "POST") {
       started = request.postDataJSON();
       callbackReturned = false;
-      return ok(route, { id: "attempt-" + ++attemptNumber, authorization_url: provider });
+      confirmationExpired = false;
+      manualResult = undefined;
+      const id = "attempt-" + ++attemptNumber;
+      return ok(route, started.method === "device_code"
+        ? { id, device: { verification_url: verification, user_code: userCode } }
+        : { id, authorization_url: provider });
     }
     if (path === "/grant-authorizations/attempt-" + attemptNumber) {
       const id = "attempt-" + attemptNumber;
-      return ok(route, !callbackReturned ? { id, status: "pending" } : started.grant_id
-        ? { id, status: "failed", code: "oauth_identity_mismatch" }
-        : { id, status: "ready", identity: b });
+      const cancelDevice = request.method() === "DELETE" && started.method === "device_code";
+      if (cancelDevice) deviceCancelled++;
+      if (confirmationExpired) return fail(route, 404, "NOT_FOUND", "The requested resource was not found.");
+      if (cancelDevice) return route.fulfill({ status: 204 });
+      if (manualResult) return ok(route, { id, status: "ready", identity: manualResult });
+      if (!callbackReturned) return ok(route, { id, status: "pending" });
+      if (started.grant_id) return ok(route, { id, status: "failed", code: "oauth_identity_mismatch" });
+      const identity = started.method === "device_code" ? deviceGrant : b;
+      return ok(route, { id, status: "ready", identity: expireOnConfirm ? { ...identity, display_name: expiringIdentityName } : identity });
+    }
+    if (path === "/grant-authorizations/attempt-" + attemptNumber + "/callback" && request.method() === "POST") {
+      const { callback_url: callbackURL } = request.postDataJSON();
+      if (callbackURL !== manualURLs[started.channel]) {
+        return fail(route, 400, "invalid_oauth_state", "Rejected callback " + callbackURL);
+      }
+      manualResult = started.channel === "codex" ? manualCodexGrant : b;
+      return route.fulfill({ status: 204 });
+    }
+    if (expireOnConfirm && path === "/grant-authorizations/attempt-" + attemptNumber + "/confirm" && request.method() === "POST") {
+      confirmationExpired = true;
+      return fail(route, 404, "NOT_FOUND", "The requested resource was not found.");
     }
     if (path === "/grant-authorizations/attempt-1/confirm" && request.method() === "POST") {
       confirmed++;
       grants.push(b);
       return ok(route, b);
+    }
+    if (path === "/grant-authorizations/attempt-" + attemptNumber + "/confirm" && request.method() === "POST" && started.method === "device_code") {
+      deviceConfirmed++;
+      grants.push(deviceGrant);
+      return ok(route, deviceGrant);
+    }
+    if (path === "/grant-authorizations/attempt-" + attemptNumber + "/confirm" && request.method() === "POST" && manualResult) {
+      manualConfirmed.push(started.channel);
+      if (started.grant_id) manualResult.grant_epoch++;
+      else grants.push(manualResult);
+      return ok(route, manualResult);
     }
     if (path === "/grants/a/disconnect" && request.method() === "POST") {
       revoked++;
@@ -134,6 +192,105 @@ async page => {
     expect(started.channel === "codex" && started.grant_id === a.id && confirmed === 1, "Reauthorization used the wrong grant or saved a mismatched identity");
     await settings.getByRole("button", { name: "Cancel", exact: true }).click();
 
+    const deviceSignIn = settings.getByRole("button", { name: "Sign in with Codex using a device code", exact: true });
+    await deviceSignIn.click();
+    const verificationLink = settings.getByRole("link", { name: "Open verification page", exact: true });
+    await verificationLink.waitFor();
+    expect(started.channel === "codex" && started.method === "device_code" && !started.grant_id, "The device entry did not select Codex Device Code");
+    const pasteCallback = settings.getByText("Paste callback URL", { exact: true });
+    expect(await pasteCallback.count() === 0, "Device sign-in incorrectly offered callback pasting");
+    expect(await verificationLink.getAttribute("href") === verification, "Device sign-in did not open the upstream verification page");
+    const code = settings.getByText(userCode, { exact: true });
+    await code.waitFor();
+    expect(await settings.getByText(/loopback callback/).count() === 0, "Device sign-in showed loopback instructions");
+    await page.setViewportSize({ width: 320, height: 720 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= 320), "The device prompt overflowed a narrow viewport");
+    await page.setViewportSize({ width: 1100, height: 720 });
+    async function completeFakeDeviceSignIn() {
+      const [deviceVerification] = await Promise.all([page.waitForEvent("popup"), verificationLink.click()]);
+      await deviceVerification.getByLabel("Enter the user code").fill(await code.textContent());
+      await deviceVerification.getByRole("button", { name: "Authorize" }).click();
+      await deviceVerification.getByText("Device authorization accepted", { exact: true }).waitFor();
+      await deviceVerification.close();
+    }
+    await completeFakeDeviceSignIn();
+    await settings.getByRole("heading", { name: "Confirm the signed-in account", exact: true }).waitFor();
+    await settings.getByText(deviceGrant.upstream_user_id, { exact: true }).waitFor();
+    expect(deviceConfirmed === 0 && await code.count() === 0, "Device sign-in bypassed confirmation or kept showing the used code");
+    await settings.getByRole("button", { name: "Save authorization", exact: true }).click();
+    await settings.getByRole("article", { name: deviceGrant.display_name }).waitFor();
+
+    const deviceReauthorize = { name: "Reauthorize with a device code", exact: true };
+    expect(await settings.getByRole("article", { name: b.display_name }).getByRole("button", deviceReauthorize).count() === 0, "ChatGPT incorrectly offered device-code reauthorization");
+    await cardA.getByRole("button", deviceReauthorize).click();
+    await verificationLink.waitFor();
+    expect(started.channel === "codex" && started.method === "device_code" && started.grant_id === a.id, "Device reauthorization did not use the selected grant");
+    await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+    await deviceSignIn.waitFor();
+    expect(deviceConfirmed === 1 && deviceCancelled === 1, "The console did not save and cancel the respective device attempts exactly once");
+
+    const codexSignIn = settings.getByRole("button", { name: "Sign in with Codex", exact: true });
+    const callbackInput = settings.getByRole("textbox", { name: "Callback URL", exact: true });
+    const saveAuthorization = settings.getByRole("button", { name: "Save authorization", exact: true });
+    const settingsURL = page.url();
+    await codexSignIn.click();
+    await pasteCallback.click();
+    await callbackInput.waitFor();
+    await page.setViewportSize({ width: 320, height: 720 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= 320), "The pasted callback form overflowed a narrow viewport");
+    await page.setViewportSize({ width: 1100, height: 720 });
+    const rejectedCode = "rejected-callback-secret";
+    await callbackInput.fill("http://127.0.0.1:1455/auth/callback?code=" + rejectedCode + "&state=wrong");
+    await callbackInput.press("Enter");
+    await settings.getByRole("alert").filter({ hasText: "The callback does not match this sign-in or has already been used." }).waitFor();
+    expect(await callbackInput.inputValue() === "" && await callbackInput.getAttribute("autocomplete") === "off" &&
+      await settings.getByText(rejectedCode).count() === 0 && page.url() === settingsURL,
+      "Submitting a rejected callback left its URL in the field, error, or address bar");
+    await callbackInput.fill(manualURLs.codex);
+    await settings.getByRole("button", { name: "Submit callback", exact: true }).click();
+    await saveAuthorization.waitFor();
+    await settings.getByText(manualCodexGrant.upstream_user_id, { exact: true }).waitFor();
+    expect(manualConfirmed.length === 0 && await callbackInput.count() === 0, "Pasting a callback bypassed confirmation or left the field open");
+    await saveAuthorization.click();
+    await settings.getByRole("article", { name: manualCodexGrant.display_name }).waitFor();
+
+    await settings.getByRole("article", { name: b.display_name }).getByRole("button", { name: "Reauthorize", exact: true }).click();
+    await pasteCallback.click();
+    await callbackInput.fill(manualURLs.chatgpt);
+    await callbackInput.press("Enter");
+    await saveAuthorization.waitFor();
+    await saveAuthorization.click();
+    await codexSignIn.waitFor();
+    expect(manualConfirmed.join(",") === "codex,chatgpt" && b.grant_epoch === 2 && page.url() === settingsURL,
+      "Pasted callbacks did not complete both sign-in channels through their confirmation steps");
+    const callbackSecrets = [rejectedCode, ...Object.values(manualURLs).flatMap(value => {
+      const query = new URL(value).searchParams;
+      return [query.get("code"), query.get("state")];
+    })];
+    expect(await page.evaluate(secrets => {
+      const stored = JSON.stringify([localStorage, sessionStorage]);
+      return secrets.every(secret => !stored.includes(secret));
+    }, callbackSecrets), "A pasted callback code or state was written to browser storage");
+
+    expireOnConfirm = true;
+    const expiringIdentity = settings.getByText(expiringIdentityName);
+    for (const { start, complete, hint } of [
+      { start: deviceSignIn, complete: completeFakeDeviceSignIn, hint: "This sign-in attempt has expired. Close it and start a new authorization." },
+      { start: codexSignIn, complete: completeFakeSignIn, hint: "This sign-in attempt is unavailable. Start a new authorization." },
+    ]) {
+      await start.click();
+      await complete();
+      await expiringIdentity.waitFor();
+      await saveAuthorization.click();
+      await settings.getByRole("alert").filter({ hasText: hint }).waitFor();
+      expect(confirmationExpired && await saveAuthorization.count() === 0 && await expiringIdentity.count() === 0 &&
+        await settings.getByRole("heading", { name: "Confirm the signed-in account", exact: true }).count() === 0,
+        "Confirmation still showed a stale account or Save action after the attempt expired");
+      await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+      await codexSignIn.waitFor();
+    }
+    expect(deviceCancelled === 1, "Closing an expired device attempt sent an additional cancellation");
+
     await Promise.all([
       page.waitForURL(origin + "/workspaces/w1/settings#workspace-grant"),
       cardA.getByRole("link", { name: w1.name }).click(),
@@ -185,9 +342,10 @@ async page => {
     await dialog.getByRole("button", { name: "Delete authorization", exact: true }).click();
     await cardB.waitFor({ state: "hidden" });
     expect(removed === 1 && grants[0] === a, "Deleting the unbound grant also affected the other channel");
-    return { confirmed, requestedRevisions, rotated, revoked, removed };
+    return { confirmed, deviceConfirmed, deviceCancelled, manualConfirmed, requestedRevisions, rotated, revoked, removed };
   } finally {
     await context.unroute(pattern);
     await context.unroute(provider);
+    await context.unroute(verification);
   }
 }

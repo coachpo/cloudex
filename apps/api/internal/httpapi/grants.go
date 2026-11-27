@@ -52,11 +52,22 @@ func (s *Server) beginGrantAuthorization(w http.ResponseWriter, r *http.Request)
 	var in struct {
 		Channel string `json:"channel"`
 		GrantID string `json:"grant_id"`
+		Method  string `json:"method"`
 	}
 	if !parse(w, r, &in, false) {
 		return
 	}
-	result, err := s.GrantGateway.BeginAuthorization(r.Context(), sessionOwner(r), in.Channel, in.GrantID)
+	var result codexgateway.AuthorizationStart
+	var err error
+	switch in.Method {
+	case "", "browser":
+		result, err = s.GrantGateway.BeginAuthorization(r.Context(), sessionOwner(r), in.Channel, in.GrantID)
+	case "device_code":
+		result, err = s.GrantGateway.BeginDeviceAuthorization(r.Context(), sessionOwner(r), in.Channel, in.GrantID)
+	default:
+		problem(w, r, http.StatusBadRequest, "invalid_authorization_method", "Select a supported sign-in method.")
+		return
+	}
 	if err != nil {
 		grantFailure(w, r, err)
 		return
@@ -69,6 +80,28 @@ func sessionOwner(r *http.Request) string { return r.Context().Value(sessionKey{
 func (s *Server) grantAuthorizationStatus(w http.ResponseWriter, r *http.Request) {
 	result, err := s.GrantGateway.AuthorizationStatus(sessionOwner(r), chi.URLParam(r, "authorization"))
 	send(w, r, result, err)
+}
+
+func (s *Server) submitGrantAuthorizationCallback(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CallbackURL string `json:"callback_url"`
+	}
+	if !parse(w, r, &in, false) {
+		return
+	}
+	if err := s.GrantGateway.SubmitAuthorizationCallback(r.Context(), sessionOwner(r), chi.URLParam(r, "authorization"), in.CallbackURL); err != nil {
+		grantFailure(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) cancelGrantAuthorization(w http.ResponseWriter, r *http.Request) {
+	if err := s.GrantGateway.CancelDeviceAuthorization(sessionOwner(r), chi.URLParam(r, "authorization")); err != nil {
+		grantFailure(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) confirmGrantAuthorization(w http.ResponseWriter, r *http.Request) {

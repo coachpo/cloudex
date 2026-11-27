@@ -17,17 +17,20 @@ const authorizationLifetime = 10 * time.Minute
 
 type authorizationAttempt struct {
 	id, owner, channel, state, verifier, nonce string
+	redirectURI                                string
 	previous                                   codexupstream.Grant
 	grantID                                    string
 	epoch                                      int64
 	token                                      codexupstream.Grant
 	status, failure, failureCode               string
 	expires                                    time.Time
+	cancelDevice                               context.CancelFunc
 }
 
 type AuthorizationStart struct {
-	ID               string `json:"id"`
-	AuthorizationURL string `json:"authorization_url"`
+	ID               string                                  `json:"id"`
+	AuthorizationURL string                                  `json:"authorization_url,omitempty"`
+	Device           *codexupstream.CodexDeviceAuthorization `json:"device,omitempty"`
 }
 
 type AuthorizationStatus struct {
@@ -48,51 +51,69 @@ func (s *Service) BeginAuthorization(ctx context.Context, owner, channel, grantI
 	if s.origin == "" || s.redirect == "" {
 		return AuthorizationStart{}, errDisabled
 	}
-	client := s.clients[channel]
-	if client == nil {
-		return AuthorizationStart{}, &Error{Status: http.StatusBadRequest, Code: "unknown_channel", Message: "Select a supported sign-in channel."}
+	a, consent, err := s.prepareAuthorization(ctx, owner, channel, grantID)
+	if err != nil {
+		return AuthorizationStart{}, err
 	}
-	a := &authorizationAttempt{id: store.ID(), state: opaqueSecret(), nonce: opaqueSecret(), verifier: opaqueSecret(),
-		owner: owner, channel: channel, grantID: grantID, status: "pending", expires: time.Now().Add(authorizationLifetime)}
-	var consent bool
-	if grantID != "" {
-		g, err := s.Store.Grant(ctx, grantID)
-		if err != nil {
-			return AuthorizationStart{}, err
-		}
-		if channel != g.Channel {
-			return AuthorizationStart{}, &Error{Status: http.StatusConflict, Code: "channel_mismatch", Message: "Use the original grant's sign-in channel."}
-		}
-		a.previous = codexupstream.Grant{ClientID: g.ClientID, Subject: g.Subject, UserID: g.UpstreamUserID, AccountID: g.UpstreamWorkspaceID}
-		a.epoch = g.GrantEpoch
-		consent = g.Status == store.GrantMissingScope
-	}
+	a.state, a.nonce, a.verifier = opaqueSecret(), opaqueSecret(), opaqueSecret()
+	a.redirectURI = s.redirect
+	a.expires = time.Now().Add(authorizationLifetime)
 	var hostID string
 	if channel == codexupstream.ChannelChatGPT {
-		var err error
 		hostID, err = s.Store.AgentHostID(ctx)
 		if err != nil {
 			return AuthorizationStart{}, err
 		}
 	}
 	challenge := sha256.Sum256([]byte(a.verifier))
-	url := client.AuthorizeURL(codexupstream.Authorization{State: a.state, Challenge: base64.RawURLEncoding.EncodeToString(challenge[:]),
-		Redirect: s.redirect, Nonce: a.nonce, AgentHostID: hostID, Previous: a.previous, Consent: consent})
+	url := s.clients[channel].AuthorizeURL(codexupstream.Authorization{State: a.state, Challenge: base64.RawURLEncoding.EncodeToString(challenge[:]),
+		Redirect: a.redirectURI, Nonce: a.nonce, AgentHostID: hostID, Previous: a.previous, Consent: consent})
+	if err := s.trackAuthorization(a); err != nil {
+		return AuthorizationStart{}, err
+	}
+	return AuthorizationStart{ID: a.id, AuthorizationURL: url}, nil
+}
+
+func (s *Service) prepareAuthorization(ctx context.Context, owner, channel, grantID string) (*authorizationAttempt, bool, error) {
+	if s.clients[channel] == nil {
+		return nil, false, &Error{Status: http.StatusBadRequest, Code: "unknown_channel", Message: "Select a supported sign-in channel."}
+	}
+	a := &authorizationAttempt{id: store.ID(), owner: owner, channel: channel, grantID: grantID, status: "pending"}
+	var consent bool
+	if grantID != "" {
+		g, err := s.Store.Grant(ctx, grantID)
+		if err != nil {
+			return nil, false, err
+		}
+		if channel != g.Channel {
+			return nil, false, &Error{Status: http.StatusConflict, Code: "channel_mismatch", Message: "Use the original grant's sign-in channel."}
+		}
+		a.previous = codexupstream.Grant{ClientID: g.ClientID, Subject: g.Subject, UserID: g.UpstreamUserID, AccountID: g.UpstreamWorkspaceID}
+		a.epoch = g.GrantEpoch
+		consent = g.Status == store.GrantMissingScope
+	}
+	return a, consent, nil
+}
+
+func (s *Service) trackAuthorization(a *authorizationAttempt) error {
 	s.mu.Lock()
 	if s.ctx.Err() != nil {
 		s.mu.Unlock()
-		return AuthorizationStart{}, errNotReady
+		return errNotReady
 	}
-	s.attempts[a.id], s.states[a.state] = a, a.id
+	s.attempts[a.id] = a
+	if a.state != "" {
+		s.states[a.state] = a.id
+	}
 	s.mu.Unlock()
 	id, state := a.id, a.state
-	time.AfterFunc(authorizationLifetime, func() {
+	time.AfterFunc(time.Until(a.expires), func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.attempts, id)
 		delete(s.states, state)
 	})
-	return AuthorizationStart{ID: a.id, AuthorizationURL: url}, nil
+	return nil
 }
 
 var (
@@ -100,38 +121,24 @@ var (
 	errWrongAccount = &Error{Status: http.StatusConflict, Code: "oauth_identity_mismatch", Message: "The selected account, workspace or registration differs from this grant."}
 )
 
-func (s *Service) CompleteAuthorization(ctx context.Context, state, code, callbackClient, providerError string) error {
-	s.mu.Lock()
-	id := s.states[state]
-	a := s.attempts[id]
-	if a == nil || !time.Now().Before(a.expires) || state == "" {
-		s.mu.Unlock()
-		return errInvalidState
-	}
-	delete(s.states, state)
-	s.mu.Unlock()
-
-	var token codexupstream.Grant
-	var err error
-	client := s.clients[a.channel]
-	if providerError != "" || code == "" {
-		err = &Error{Status: http.StatusBadRequest, Code: "authorization_denied", Message: "The provider did not complete the sign-in."}
-	} else {
-		token, err = client.Exchange(ctx, code, a.verifier, s.redirect, a.nonce, callbackClient, a.previous)
-		if err != nil {
-			var upstream *codexupstream.UpstreamError
-			switch {
-			case errors.As(err, &upstream) && upstream.Code == "identity_mismatch":
-				err = errWrongAccount
-			case errors.As(err, &upstream) && upstream.Code == "codex_workspace_unverified":
-				err = &Error{Status: http.StatusBadRequest, Code: "codex_workspace_unverified", Message: "The Codex authorization did not verify an upstream workspace."}
-			case errors.As(err, &upstream) && upstream.Stage == "identity":
-				err = &Error{Status: http.StatusBadRequest, Code: "oauth_identity_unverified", Message: "The provider's identity could not be verified. Check the account and workspace before trying again."}
-			default:
-				err = &Error{Status: http.StatusBadRequest, Code: "oauth_exchange_failed", Message: "Sign-in failed at the provider's token exchange."}
-			}
+func authorizationExchangeError(err error) error {
+	var upstream *codexupstream.UpstreamError
+	if errors.As(err, &upstream) {
+		switch {
+		case upstream.Stage == "device_poll":
+			return &Error{Status: http.StatusBadRequest, Code: "device_code_authorization_failed", Message: "OpenAI did not complete device sign-in. Start a new attempt."}
+		case upstream.Code == "identity_mismatch":
+			return errWrongAccount
+		case upstream.Code == "codex_workspace_unverified":
+			return &Error{Status: http.StatusBadRequest, Code: "codex_workspace_unverified", Message: "The Codex authorization did not verify an upstream workspace."}
+		case upstream.Stage == "identity":
+			return &Error{Status: http.StatusBadRequest, Code: "oauth_identity_unverified", Message: "The provider's identity could not be verified. Check the account and workspace before trying again."}
 		}
 	}
+	return &Error{Status: http.StatusBadRequest, Code: "oauth_exchange_failed", Message: "Sign-in failed at the provider's token exchange."}
+}
+
+func (s *Service) finishAuthorization(a *authorizationAttempt, token codexupstream.Grant, err error) error {
 	if err == nil && a.grantID != "" &&
 		(token.ClientID != a.previous.ClientID || token.Subject != a.previous.Subject ||
 			token.UserID != a.previous.UserID || token.AccountID != a.previous.AccountID) {
@@ -139,7 +146,7 @@ func (s *Service) CompleteAuthorization(ctx context.Context, state, code, callba
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.attempts[id] != a {
+	if s.attempts[a.id] != a || !time.Now().Before(a.expires) {
 		return errInvalidState
 	}
 	a.verifier, a.nonce = "", ""

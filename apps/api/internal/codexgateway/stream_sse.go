@@ -145,24 +145,25 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 		}
 		return true
 	}
-	rawContentType := response.Header.Get("Content-Type")
-	content, _, _ := mime.ParseMediaType(rawContentType)
+	contentTypes := response.Header.Values("Content-Type")
 	var stream io.Reader = response.Body
-	if content != "text/event-stream" {
+	var verified bool
+	switch len(contentTypes) {
+	case 0:
 		// Some Responses origins omit Content-Type on successful streams.
 		// Confirm the framing before sending 200 and replay the bytes read
 		// during inspection, including any data buffered past the first event.
-		var verified bool
-		if rawContentType == "" {
-			timer := time.AfterFunc(handshakeTimeout, cancel)
-			stream, verified = probeResponsesSSE(response.Body)
-			timer.Stop()
-		}
-		if !verified {
-			slog.Warn("unrecognized upstream SSE response", "status", response.StatusCode, "content_type_present", rawContentType != "")
-			writeGatewayFailure(w, outcomeUnknown())
-			return true
-		}
+		timer := time.AfterFunc(handshakeTimeout, cancel)
+		stream, verified = probeResponsesSSE(response.Body)
+		timer.Stop()
+	case 1:
+		content, _, err := mime.ParseMediaType(contentTypes[0])
+		verified = err == nil && content == "text/event-stream"
+	}
+	if !verified {
+		slog.Warn("unrecognized upstream SSE response", "status", response.StatusCode, "content_type_present", len(contentTypes) != 0)
+		writeGatewayFailure(w, outcomeUnknown())
+		return true
 	}
 	headersSent := false
 	err = a.WithWrite(0, func() error {
@@ -186,7 +187,15 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 	err = consumeSSE(scanner, func(line []byte) {
 		idle.Reset(streamIdleTimeout)
 	}, func(event sseEvent) error {
-		kind := progress.observe(event.data, event.kind)
+		var kind string
+		eventKind, valid := responsesSSEKind(event)
+		if valid {
+			kind = progress.observe(event.data, event.kind)
+		}
+		if eventKind == "response.completed" && kind == "" {
+			// Neither record nor forward a completion without a response ID.
+			return nil
+		}
 		data := event.data
 		if kind == "response.metadata" {
 			var err error
@@ -195,7 +204,7 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 				return err
 			}
 		}
-		data = redactResponseJSON(data, upstream.Token)
+		data = redactSSEData(data, upstream.Token)
 		if !bytes.Equal(data, event.data) {
 			event.wire = event.wire[:0]
 			if event.kind != "" {
@@ -206,6 +215,12 @@ func (g *gatewayTransport) openSSE(w http.ResponseWriter, r *http.Request, a *Ad
 			event.wire = append(event.wire, "data: "...)
 			event.wire = append(event.wire, data...)
 			event.wire = append(event.wire, '\n', '\n')
+		}
+		// Raw SSE fields and comments bypass the JSON redactor.
+		for _, secret := range []string{upstream.Token.AccessToken, upstream.Token.RefreshToken, upstream.Token.IDToken} {
+			if secret != "" && bytes.Contains(event.wire, []byte(secret)) {
+				event.wire = bytes.ReplaceAll(event.wire, []byte(secret), []byte("[redacted]"))
+			}
 		}
 		return a.WithWrite(0, func() error {
 			if progress.terminal {
@@ -355,25 +370,62 @@ func probeResponsesSSE(body io.Reader) (io.Reader, bool) {
 			return nil
 		}
 		observed = true
-		var message struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(event.data, &message) != nil {
-			return nil
-		}
-		if message.Type == "" {
-			message.Type = event.kind
-		}
-		if event.kind != "" && event.kind != message.Type {
-			return nil
-		}
-		recognized = strings.HasPrefix(message.Type, "response.") || message.Type == "error" || message.Type == "codex.rate_limits"
+		kind, valid := responsesSSEKind(event)
+		recognized = valid && (strings.HasPrefix(kind, "response.") || kind == "error" || kind == "codex.rate_limits")
 		return nil
 	}, func() bool { return observed })
 	if err != nil || !recognized {
 		return nil, false
 	}
 	return io.MultiReader(bytes.NewReader(prefix.Bytes()), body), true
+}
+
+func responsesSSEKind(event sseEvent) (string, bool) {
+	var message *struct {
+		Type     string `json:"type"`
+		Response *struct {
+			ID string `json:"id"`
+		} `json:"response"`
+	}
+	err := json.Unmarshal(event.data, &message)
+	if message == nil {
+		return "", false
+	}
+	kind := message.Type
+	if kind == "" {
+		kind = event.kind
+	}
+	return kind, err == nil && (kind != "response.completed" || message.Response != nil && validGatewayID(message.Response.ID))
+}
+
+func redactSSEData(data []byte, grant codexupstream.Grant) []byte {
+	redacted := redactResponseJSON(data, grant)
+	if !bytes.Equal(data, redacted) || bytes.IndexByte(data, '\\') == -1 {
+		return redacted
+	}
+	// Scan decoded strings before merging duplicate keys so even an overwritten
+	// value cannot pass through the raw event with an escaped credential.
+	input := bytes.NewReader(data)
+	decoder := json.NewDecoder(input)
+	decoder.UseNumber()
+	for {
+		value, err := decoder.Token()
+		if err != nil {
+			return data
+		}
+		if value, ok := value.(string); ok && redactUpstreamString(value, grant) != value {
+			break
+		}
+	}
+	input.Reset(data)
+	decoder = json.NewDecoder(input)
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	redacted, _ = json.Marshal(redactResponseValue(value, grant))
+	return redacted
 }
 
 type sseEvent struct {

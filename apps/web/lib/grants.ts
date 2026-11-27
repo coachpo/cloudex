@@ -18,7 +18,10 @@ export type ManagedGrant = GrantIdentity & {
   workspaces: { id: string; name: string }[];
   grant_epoch: number;
 };
-export type GrantAuthorization = { id: string; authorization_url: string };
+export type GrantAuthorization = { id: string } & (
+  | { authorization_url: string; device?: never }
+  | { authorization_url?: never; device: { verification_url: string; user_code: string } }
+);
 export type GrantAttempt =
   | { id: string; status: "pending" }
   | { id: string; status: "ready"; identity: GrantIdentity }

@@ -63,24 +63,27 @@ type fixtureInference struct {
 }
 
 type fixtureOAuth struct {
-	nonce, challenge, subject, redirect string
+	nonce, challenge, subject, redirect, account string
 }
 
 type fixtureFault struct {
-	refuseUpgrade bool
-	dropStream    bool
-	dropTerminal  bool
+	refuseUpgrade  bool
+	dropStream     bool
+	dropTerminal   bool
+	beforeExchange func(context.Context)
 }
 
 type gatewayFixture struct {
-	t        *testing.T
-	channel  string
-	account  string
-	model    string
-	fault    fixtureFault
-	key      *rsa.PrivateKey
-	server   *httptest.Server
-	requests atomic.Int32
+	t         *testing.T
+	channel   string
+	account   string
+	model     string
+	fault     fixtureFault
+	device    func(*gatewayFixture, http.ResponseWriter, *http.Request)
+	key       *rsa.PrivateKey
+	server    *httptest.Server
+	requests  atomic.Int32
+	exchanges atomic.Int32
 
 	mu       sync.Mutex
 	codes    map[string]fixtureOAuth
@@ -92,6 +95,10 @@ type gatewayFixture struct {
 }
 
 func newGatewayFixture(t *testing.T, channel string, fault fixtureFault) *gatewayFixture {
+	return newGatewayFixtureWithDevice(t, channel, fault, nil)
+}
+
+func newGatewayFixtureWithDevice(t *testing.T, channel string, fault fixtureFault, device func(*gatewayFixture, http.ResponseWriter, *http.Request)) *gatewayFixture {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -99,7 +106,7 @@ func newGatewayFixture(t *testing.T, channel string, fault fixtureFault) *gatewa
 	}
 	f := &gatewayFixture{
 		t: t, channel: channel, account: "fixture-workspace-" + channel,
-		model: fixtureCodexModel, fault: fault, key: key, codes: map[string]fixtureOAuth{},
+		model: fixtureCodexModel, fault: fault, device: device, key: key, codes: map[string]fixtureOAuth{},
 	}
 	if channel == codexupstream.ChannelChatGPT {
 		f.model = fixtureChatGPTModel
@@ -165,7 +172,8 @@ func (f *gatewayFixture) issueCode(authorizationURL string) (state, code, issued
 	}
 	code = "synthetic-code-" + q.Get("state")
 	f.mu.Lock()
-	f.codes[code] = fixtureOAuth{q.Get("nonce"), q.Get("code_challenge"), "fixture-" + f.channel + "-subject", q.Get("redirect_uri")}
+	f.codes[code] = fixtureOAuth{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"),
+		subject: "fixture-" + f.channel + "-subject", redirect: q.Get("redirect_uri"), account: f.account}
 	f.mu.Unlock()
 	return q.Get("state"), code, issued
 }
@@ -180,7 +188,18 @@ func (f *gatewayFixture) serve(w http.ResponseWriter, r *http.Request) {
 			"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(f.key.E)).Bytes()),
 		}}})
 	case "/token":
+		f.exchanges.Add(1)
+		if f.fault.beforeExchange != nil {
+			f.fault.beforeExchange(r.Context())
+		}
 		f.exchange(w, r)
+	case "/api/accounts/deviceauth/usercode", "/api/accounts/deviceauth/token":
+		if f.device == nil {
+			f.t.Error("unexpected device authorization request")
+			http.NotFound(w, r)
+			return
+		}
+		f.device(f, w, r)
 	case "/.well-known/openid-configuration":
 		writeFixtureJSON(w, map[string]string{"issuer": f.server.URL, "revocation_endpoint": f.server.URL + "/revoke"})
 	case "/revoke":
@@ -242,7 +261,7 @@ func (f *gatewayFixture) exchange(w http.ResponseWriter, r *http.Request) {
 	scope := "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 	if f.channel == codexupstream.ChannelCodex {
 		claims["https://api.openai.com/auth"] = map[string]any{
-			"chatgpt_account_id": f.account, "chatgpt_user_id": "fixture-codex-user",
+			"chatgpt_account_id": auth.account, "chatgpt_user_id": "fixture-codex-user",
 		}
 		access = f.sign(claims)
 		scope = "openid profile email offline_access api.connectors.read api.connectors.invoke"

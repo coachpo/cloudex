@@ -157,14 +157,18 @@ func (c *Client) Exchange(ctx context.Context, code, verifier, redirect, nonce, 
 	if code == "" || verifier == "" || !validRedirect(redirect, c.Channel()) {
 		return Grant{}, &UpstreamError{StatusCode: http.StatusBadRequest, Code: "invalid_oauth_callback", Stage: "exchange"}
 	}
-	form := url.Values{
-		"grant_type": {"authorization_code"}, "code": {code},
-		"code_verifier": {verifier}, "redirect_uri": {redirect},
-	}
+	form := authorizationCodeForm(code, verifier, redirect)
 	if c.Channel() == ChannelCodex {
 		return c.codexExchange(ctx, form, callbackClient, previous)
 	}
 	return c.chatGPTExchange(ctx, form, nonce, callbackClient, previous)
+}
+
+func authorizationCodeForm(code, verifier, redirect string) url.Values {
+	return url.Values{
+		"grant_type": {"authorization_code"}, "code": {code},
+		"code_verifier": {verifier}, "redirect_uri": {redirect},
+	}
 }
 
 func validRedirect(raw, channel string) bool {

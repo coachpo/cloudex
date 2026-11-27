@@ -957,26 +957,46 @@ func TestGatewayWebSocketContinuationStaysInItsThread(t *testing.T) {
 }
 
 func TestGatewaySSEWithoutContentTypeRequiresResponsesFraming(t *testing.T) {
+	responses := ": keep-alive\r\n\r\n" +
+		"event: response.created\r\ndata: {\"response\":{\"id\":\"resp_fixture\"}}\r\n\r\n" +
+		"event: response.completed\r\ndata: " + transportTerminal + "\r\n\r\n"
+	message := "event: message\ndata: " + transportTerminal + "\n\n"
+	credential := ": access-chatgpt\nid: access-chatgpt\n\ndata: " + transportTerminal + "\n\n"
+	nullEvent := "event: response.completed\ndata: null\n\n"
+	missingResponse := "data: {\"type\":\"response.completed\"}\n\n"
+	missingResponseID := "event: response.completed\ndata: {\"response\":{}}\n\n"
+	escapedCredential := "data: " + `{"delta":"\u0061ccess-chatgpt","type":"response.output_text.delta"}` + "\n\ndata: " + transportTerminal + "\n\n"
+	escapedDuplicate := "data: " + `{"delta":"\u0061ccess-chatgpt","delta":"safe","type":"response.output_text.delta"}` + "\n\ndata: " + transportTerminal + "\n\n"
+	ordinaryEscape := "data: " + `{"delta":"\u0068ello", "type":"response.output_text.delta"}` + "\n\ndata: " + transportTerminal + "\n\n"
 	for _, tc := range []struct {
-		name, contentType, body string
-		want                    int
+		name, body  string
+		contentType []string
+		want        int
 	}{
-		{"responses-stream", "", ": keep-alive\r\n\r\n" +
-			"event: response.created\r\ndata: {\"response\":{\"id\":\"resp_fixture\"}}\r\n\r\n" +
-			"event: response.completed\r\ndata: " + transportTerminal + "\r\n\r\n", http.StatusOK},
-		{"json", "", `{"type":"response.completed"}`, http.StatusConflict},
-		{"html", "", "<html>not an event stream</html>", http.StatusConflict},
-		{"oversized-prefix", "", strings.Repeat(": keep-alive\n\n", 5000) + "data: " + transportTerminal + "\n\n", http.StatusConflict},
-		{"unrelated-event", "", "event: message\ndata: {\"type\":\"message\"}\n\n", http.StatusConflict},
-		{"explicit-non-sse-type", "application/json", "data: " + transportTerminal + "\n\n", http.StatusConflict},
+		{"responses-stream", responses, nil, http.StatusOK},
+		{"json-type-with-generic-event-name", message, nil, http.StatusOK},
+		{"non-data-credential", credential, nil, http.StatusOK},
+		{"escaped-json-credential", escapedCredential, nil, http.StatusOK},
+		{"escaped-json-credential-with-duplicate-key", escapedDuplicate, nil, http.StatusOK},
+		{"ordinary-json-escape", ordinaryEscape, nil, http.StatusOK},
+		{"null-before-valid-terminal", strings.Replace(responses, "event: response.completed", nullEvent+"event: response.completed", 1), nil, http.StatusOK},
+		{"missing-response-id-before-valid-terminal", strings.Replace(responses, "event: response.completed", missingResponse+missingResponseID+"event: response.completed", 1), nil, http.StatusOK},
+		{"explicit-sse-type", responses, []string{"text/event-stream; charset=utf-8"}, http.StatusOK},
+		{"json", `{"type":"response.completed"}`, nil, http.StatusConflict},
+		{"html", "<html>not an event stream</html>", nil, http.StatusConflict},
+		{"oversized-prefix", strings.Repeat(": keep-alive\n\n", 5000) + "data: " + transportTerminal + "\n\n", nil, http.StatusConflict},
+		{"unrelated-event", "event: message\ndata: {\"type\":\"message\"}\n\n", nil, http.StatusConflict},
+		{"null-event-data", nullEvent, nil, http.StatusConflict},
+		{"terminal-missing-response", missingResponse, nil, http.StatusConflict},
+		{"terminal-missing-response-id", missingResponseID, nil, http.StatusConflict},
+		{"explicit-non-sse-type", responses, []string{"application/json"}, http.StatusConflict},
+		{"explicit-empty-type", responses, []string{""}, http.StatusConflict},
+		{"conflicting-types", responses, []string{"", "application/json"}, http.StatusConflict},
+		{"invalid-media-parameter", responses, []string{"text/event-stream; charset"}, http.StatusConflict},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream := transportCatalog(t, "chatgpt", func(w http.ResponseWriter, _ *http.Request) {
-				if tc.contentType == "" {
-					w.Header()["Content-Type"] = nil
-				} else {
-					w.Header().Set("Content-Type", tc.contentType)
-				}
+				w.Header()["Content-Type"] = tc.contentType
 				w.WriteHeader(http.StatusOK)
 				_, _ = io.WriteString(w, tc.body)
 			})
@@ -988,11 +1008,11 @@ func TestGatewaySSEWithoutContentTypeRequiresResponsesFraming(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.StatusCode, tc.want)
 			}
 			if tc.want == http.StatusOK {
-				if response.Header.Get("Content-Type") != "text/event-stream" ||
-					!strings.Contains(body, ": keep-alive\n\n") ||
-					!strings.Contains(body, "event: response.created\ndata: ") ||
-					!strings.Contains(body, "event: response.completed\ndata: "+transportTerminal+"\n\n") {
-					t.Fatal("initial events were lost or the downstream content type was incorrect")
+				wantBody := strings.NewReplacer("\r\n", "\n", "access-chatgpt", "[redacted]", `"delta":"\u0061ccess-chatgpt","delta":"safe"`, `"delta":"safe"`,
+					`\u0061ccess-chatgpt`, "[redacted]",
+					missingResponse, "", missingResponseID, "").Replace(tc.body)
+				if response.Header.Get("Content-Type") != "text/event-stream" || body != wantBody {
+					t.Fatal("SSE changed framing, missed redaction, or did not set the downstream content type")
 				}
 			} else if !strings.Contains(body, "submission_outcome_unknown") {
 				t.Fatal("unrecognized response did not preserve the unknown submission outcome")

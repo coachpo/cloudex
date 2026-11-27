@@ -61,6 +61,8 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 				r.Delete("/grants/{grant}", s.deleteGrant)
 				r.Post("/grant-authorizations", s.beginGrantAuthorization)
 				r.Get("/grant-authorizations/{authorization}", s.grantAuthorizationStatus)
+				r.Post("/grant-authorizations/{authorization}/callback", s.submitGrantAuthorizationCallback)
+				r.Delete("/grant-authorizations/{authorization}", s.cancelGrantAuthorization)
 				r.Post("/grant-authorizations/{authorization}/confirm", s.confirmGrantAuthorization)
 			}
 			r.Get("/templates", s.templates)
