@@ -53,7 +53,7 @@ ssh -N -L 127.0.0.1:1455:127.0.0.1:1455 user@control-plane-host
 ### 添加授权和绑定 Workspace
 
 1. 在 **设置 → Codex 授权** 选择 **Sign in with Codex** 或 **Sign in with ChatGPT**。浏览器回调不可达时，Codex 可选 **Device Code**，前提是个人账号或所在的 ChatGPT workspace 已启用设备码登录。在 Cloudex 发起后打开 OpenAI 验证链接并输入一次性用户码。控制面通过 HTTPS 轮询与换码，管理员电脑无需回环监听或 SSH 隧道。完成任一方式后，回到发起授权的控制台会话，核对并确认账号及适用的 workspace 或应用注册。ChatGPT 若未授予套餐推理权限，按授权行提示对同一注册重新授权。[Codex 设备码启用条件](https://learn.chatgpt.com/docs/auth#preferred-device-code-authentication-beta) · [上游公开支持边界](codex-gateway.md#上游公开支持边界)
-2. 在 **Workspace → 设置** 选择一份授权。打开 Codex 前等待实例凭据就绪。换绑或轮换后重新启动客户端进程，Codex Desktop 需要重新连接 App Server。换绑后已发给旧上游的请求可能仍在执行。
+2. 在 **Workspace → 设置** 选择一份授权。打开 Codex 前等待实例凭据就绪。换绑或轮换后按[恢复授权与凭据](#恢复授权与凭据)重新打开客户端。换绑后已发给旧上游的请求可能仍在执行。
 3. 从工作容器的 Shell 执行 `codex --version` 核对实际运行的版本。交互 `codex`、`codex exec` 和 `codex app-server` 使用工作镜像的启动入口读取当前绑定的模型配置。使用 `-m` 时选择当前目录中的模型 slug。固定版本和镜像构建入口见[工作镜像](../docker/Dockerfile.workspace)。
 
 ```sh
@@ -70,6 +70,7 @@ codex exec --skip-git-repo-check --json 'Return CLOUDEX_OK.'
 
 - **需重新授权。** 对受影响授权选择重新授权，使用原注册和同一已验证身份。刷新结果未知时需重新授权，以免再次使用可能已轮换的旧 refresh token。
 - **绑定成功，容器待准备。** 在 Host 详情核对连接，在 Workspace 查看容器的实际状态。Host 恢复后控制面会重新检查容器和凭据安装。配置过 HTTPS Origin 后，仍无推理响应时，先从工作容器排查网关 DNS、服务器证书和反代。
+- **换绑或轮换后恢复会话。** 等实例凭据就绪后，重启 Codex CLI 或让 Codex Desktop 重新连接远端 App Server。在同一容器中切回同一份授权的同一代次后，打开原会话即可用新凭据续聊。重授权会开启新的会话空间，容器重建会丢弃原会话文件。[换绑和上下文](codex-gateway.md#换绑和上下文)
 - **推理提交结果未知。** 原上游可能仍在执行，也可能已完成。网关会拒绝原运行中的自动重发。检查本地工具是否已产生副作用，再决定是否从新的客户端运行发起请求。
 - **断开授权。** 先查看受影响的 Workspace。断开立即停止本地转发，保留 Workspace 的绑定供识别影响范围。远端撤权结果未知时，控制台显示本地已断开、远端未确认。删除授权前先解除所有绑定。
 - **套餐限流。** `subscription_sharing_usage_limit_exceeded` 表示本次授权的用量请求被拒，`subscription_sharing_usage_unavailable` 表示用量服务暂不可用。按当前授权恢复，保留服务报告的重试信息，其他授权仍按自己的状态工作。[错误与恢复契约](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
@@ -124,6 +125,12 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 ## Host 调度
 
 **Cordon host** 暂停新放置，已有 Workspace 和连接可继续使用。**Disable host** 断开该 Host 的控制连接及其服务的 SSH 和 Web Terminal 连接，并暂停操作派发。已有容器继续运行。选择 **Resume scheduling** 恢复调度。
+
+## 移除远程 Host
+
+先删除归属该 Host 的 Workspace，等待未完成操作结束或取消可取消的操作。随后在远程 Host 的详情页选择 **删除主机**，核对名称和影响后确认。内置 `local` 受保护。删除会一并清理该登记的 Workspace 操作历史，远端机器、Agent 部署及 Docker 容器、卷、镜像和网络继续保留。[删除范围](api.md#删除-host)
+
+若页面显示删除结果待确认，选择 **重新检查**。页面确认主机仍在登记后即可重试。移除成功后，可按[加入远程 Host](#加入远程-host)用原名称登记，新登记会获得新的 Host ID。
 
 ## 通过 SSH 连接 Workspace
 

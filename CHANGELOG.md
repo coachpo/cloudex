@@ -6,10 +6,12 @@
 
 - Workspace 可绑定独立的 Sign in with Codex 或 Sign in with ChatGPT 授权。Codex 网关优先走 Responses WebSocket，并在生成未提交的条件下保留 HTTP/SSE 回退。[Codex 网关](docs/operations.md#codex-网关)
 - **Hosts → Add host** 支持 SSH 直连。管理员核对主机指纹后，可使用密码或私钥接入远端 Docker，直接在该 Host 放置和管理 Workspace。[加入远程 Host](docs/operations.md#加入远程-host)
+- 管理员可移除远程 Host 的登记，再用原名称重新登记。远端 Docker 资源继续保留。[移除远程 Host](docs/operations.md#移除远程-host)
 - 控制台和 API 已移除 Cloud Task、全局模型服务和 Codex 沙箱设置。通过 SSH、Web Terminal 或 Codex Desktop 使用 Workspace，Git 页可查看工作树快照。
 - 可为每个 Workspace 保存 HTTPS 仓库凭据。首次 clone 和后续 fetch、push 可复用令牌，控制台只回显配置状态和用户名。[仓库凭据](docs/workspace-lifecycle.md#仓库凭据)
 - 管理员在设置页统一管理 SSH 公钥，运行中的 Workspace 无需重建即可接收新公钥。Host 调度提供 Enabled、Cordon 和 Disabled。[SSH 连接](docs/operations.md#通过-ssh-连接-workspace)
 - Workspace 的授权绑定跨容器重建保留。运行实例从控制面获得独立的网关凭据。工作树和 SSH 主机身份使用独立卷。容器替换从镜像初始化 home。[数据保留](docs/operations.md#数据保留)
+- 同一容器切回同一份授权的同一代次后，可恢复原 Codex 会话并续聊。[恢复授权与凭据](docs/operations.md#恢复授权与凭据)
 
 ## 管理员账号与界面语言（未发布）
 

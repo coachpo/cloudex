@@ -30,6 +30,14 @@ CLOUDEX_TEST_CODEX_BIN=/absolute/path/to/codex go test -count=1 -v ./cmd/server 
 | W1 换绑 B，W2 保持 A，两个方向都测 | 在拨号前、上游 `101` 后但下游 `101` 前、生成/工具写入边界、SSE 在途分别暂停。提交后 A 不收到 W1 新获准的写入，B 不收到 A 的旧会话，W2 继续 A。提交前已交给网络的数据单独核对。 |
 | 限流和上游不可用 | 记录原渠道、请求实际次数、状态码、错误码和重试信息。另一个授权请求仍使用它自己的身份。 |
 
+### 换回原授权的受控回归
+
+从 `apps/api` 运行以下测试，分别验证 WebSocket 和 SSE。切到 B 时网关拒绝 A 的历史引用。切回 A 后，客户端用新凭据提交带原工具调用及结果的续聊请求。受控上游应恰好收到一次该请求，客户端应收到 `response.completed`。使用首次绑定 A 时的凭据应收到 `401`。[换绑回归源码](../apps/api/internal/codexgateway/transport_test.go)
+
+```sh
+go test -count=1 -v ./internal/codexgateway -run '^TestGatewayRebindRestoresCompletedToolHistory$'
+```
+
 ## 镜像与分机验证
 
 使用独立、可丢弃的 Docker daemon。从仓库根目录构建工作镜像。把 `CLOUDEX_TEST_GATEWAY_DNS` 设为工作容器可解析且能够连接到测试进程的 DNS 名或 IPv4 地址，例如 Docker Desktop 提供的 `host.docker.internal`。测试进程使用临时端口和测试 CA，工作容器内通过正式启动器运行客户端。Docker 测试由可丢弃容器提供工具执行隔离，测试命令显式选择 Codex 的 `danger-full-access`。生产镜像的 Codex 沙箱默认值不受测试选项影响。
@@ -79,6 +87,18 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 ## 真实账号验收
 
 真实上游验收需要获授权的本人账号、应用注册和确切操作范围。每个渠道分别验证回调身份、scope、模型目录、同一模型 WS 和 SSE 两格的两次工具往返、终态，以及一次实际刷新。要求专属路由的 Codex workspace 分别验证目录与 Responses 的最终路由。记录上游请求 ID；服务端未回显 workspace 时标为未知。故障和竞态由受控上游提供确定性证据。OpenAI 对部署形态的正式支持独立于以上结果。[公开支持边界](codex-gateway.md#上游公开支持边界)
+
+### 换回原授权的镜像复验
+
+在[隔离 Docker 环境](#镜像与分机验证)使用待验收的工作镜像和两份获准用于验收的授权 A、B，分别跑 WebSocket 和 SSE。每轮保持 Workspace 容器运行，沿用两份授权的原代次。每次换绑都等新凭据就绪，再从正式启动器运行新的 Codex 进程。WebSocket 轮使用默认传输，SSE 轮在每次 `codex` 调用中传入 `-c model_providers.cloudex.supports_websockets=false`。
+
+在 Workspace 到网关的链路上采集请求的传输、状态和终态事件类型。使用观测代理时须保留 WebSocket 升级和 SSE flush。[日志约定](operations.md#配置两条网络路径)
+
+1. 首次绑定 A 时运行 `codex exec --json`，让工具生成一个随机 UUID，要求客户端只回复固定确认语，使 UUID 仅出现于工具结果。记录会话 ID 和该结果。在测试进程中保留首次绑定 A 的网关凭据，供本轮失效检查。
+2. 换绑 B 并完成一轮请求，再切回 A。用 `codex exec resume --json` 和本轮原会话 ID 续聊，要求直接复述先前工具返回的 UUID，提示词里省略该值。成功时 UUID 一致，新增工具调用为零，上游收到续聊请求且客户端收到 `response.completed`。
+3. 用本轮首次绑定 A 时的旧凭据请求 `/g/v1/models`，核对 `401 invalid_gateway_credential`。同时核对实际传输。WebSocket 轮须观测到 `101` 和经 WebSocket 送达的终态，且 `POST /g/v1/responses` 的 SSE 请求数为零。SSE 轮须观测到 SSE 送达的终态。证据只记录必要的请求与结果元数据，省略账号信息和凭据值。
+
+### 验收记录
 
 2026-11-27，合成版 `8427356` 在独立 Colima Docker 环境中使用 `codex-cli 0.172.0` 和 `gpt-6.2-sol` 完成真实账号验收。Sign in with Codex 和 Sign in with ChatGPT 分别通过 WebSocket 和强制 HTTP/SSE 完成两次有依赖的工具往返，四格均收到 `response.completed`。撤销测试中，两渠道上游均确认撤权，原实例凭据随后被网关拒绝。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。
 
