@@ -80,6 +80,10 @@ func TestSSHClientConfigSeparatesHostAliasFromWorkspaceIdentity(t *testing.T) {
 		{name: "gateway.", alias: "cloudex-9659fa2a"},
 		{name: "gateway_", alias: "cloudex-9659fa2a"},
 		{name: "gateway-", alias: "cloudex-9659fa2a"},
+		// "api" has the gateway Host "cloudex-api-gateway"; a workspace must not reuse it.
+		{name: "api-gateway", alias: "cloudex-9659fa2a"},
+		{name: "API-Gateway", alias: "cloudex-9659fa2a"},
+		{name: "api-gateway-v2", alias: "cloudex-api-gateway-v2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()

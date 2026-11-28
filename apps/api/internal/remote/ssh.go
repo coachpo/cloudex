@@ -96,9 +96,15 @@ const workspacePrefix = "cloudex-"
 
 func WorkspaceIdentity(id string) string { return workspacePrefix + id }
 
+// GatewayHostSuffix turns a workspace Host alias into the Host alias of its
+// gateway hop. HostAlias never ends in it, so one workspace's Host block cannot
+// shadow another workspace's gateway block in the same ssh_config.
+const GatewayHostSuffix = "-gateway"
+
 func HostAlias(id, name string) string {
-	if workspaceHostName.MatchString(name) {
-		return workspacePrefix + strings.ToLower(name)
+	alias := strings.ToLower(name)
+	if workspaceHostName.MatchString(name) && !strings.HasSuffix(alias, GatewayHostSuffix) {
+		return workspacePrefix + alias
 	}
 	return workspacePrefix + id[:8]
 }

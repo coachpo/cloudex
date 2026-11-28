@@ -91,7 +91,7 @@ func (c *Control) Access(ctx context.Context, id string) (Access, error) {
 		v.GatewayFingerprint = ssh.FingerprintSHA256(c.GatewayKey)
 		identity := remote.WorkspaceIdentity(w.ID)
 		v.KnownHosts = c.GatewayKeyAlias + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(c.GatewayKey))) + "\n" + identity + " " + public
-		jump := v.Alias + "-gateway"
+		jump := v.Alias + remote.GatewayHostSuffix
 		v.SSHConfig = fmt.Sprintf("Host %s\n    HostName %s\n    Port %d\n    User %s\n    HostKeyAlias %s\n    StrictHostKeyChecking yes\n\n"+
 			"Host %s\n    HostName %s\n    Port %d\n    User %s\n    ProxyJump %s\n    HostKeyAlias %s\n    StrictHostKeyChecking yes\n",
 			jump, v.Host, v.Port, identity, c.GatewayKeyAlias, v.Alias, identity, remote.BackendPort, v.User, jump, identity)
