@@ -1,12 +1,10 @@
-# Cross-compile on the builder's platform instead of emulating the Go toolchain.
-FROM --platform=$BUILDPLATFORM golang:1.27.4-trixie AS build
+FROM golang:1.27.4-trixie AS build
 WORKDIR /build
 COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download
 COPY apps/api/ ./
-ARG TARGETOS TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/cloudex-server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/cloudex-agent ./cmd/host-agent
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cloudex-server ./cmd/server
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cloudex-agent ./cmd/host-agent
 
 FROM debian:trixie-slim AS agent
 COPY --from=build /out/cloudex-agent /usr/local/bin/cloudex-agent
