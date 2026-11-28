@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -212,7 +213,7 @@ func TestDockerExecAttachRejectsPauseBeforeStart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{
-		Image: "cloudex/workspace:local", Cmd: []string{"sleep", "infinity"},
+		Image: store.DefaultWorkspaceImage, Cmd: []string{"sleep", "infinity"},
 	}})
 	if err != nil {
 		t.Fatal(err)

@@ -12,13 +12,13 @@
 
 ### 预构建镜像
 
-`cloudex-api`、`cloudex-agent`、`cloudex-web` 和 `cloudex-workspace` 在 `ghcr.io/coachpo` 下使用相同的 Cloudex 发布标签，每个镜像均支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 标签时发布原标签、语义化版本 `<主>.<次>.<修订>` 和 `<主>.<次>`、`sha-<完整提交>` 及 `latest`。手动构建使用 `manual-<完整提交>`。[镜像发布工作流](../.github/workflows/docker-images.yml)
+`cloudex-api`、`cloudex-agent`、`cloudex-web` 和 `cloudex-workspace` 在 `ghcr.io/coachpo` 下使用相同的 Cloudex 发布标签，每个镜像均支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` Git 标签时发布对应的镜像标签、`sha-<完整提交>` 和 `latest`。Git 标签中的连续非法镜像标签字符会替换成连字符，例如 `v0.0.4+rebuild` 对应 `v0.0.4-rebuild`。正式 SemVer 版本另有 `<主>.<次>.<修订>` 和 `<主>.<次>` 别名，预发布版本另有带预发布后缀的版本别名。手动构建只使用 `manual-<完整提交>`。[镜像发布工作流](../.github/workflows/docker-images.yml)
 
-Workspace 镜像在两种架构的原生 runner 上分别构建，核对镜像内 `codex --version` 与控制面固定的 `codexupstream.CodexClientVersion` 一致，再运行网关受控验收。两种架构均通过且 APP 镜像均构建成功后，工作流才发布多架构标签。升级 Codex 时同步修改 `docker/Dockerfile.workspace` 的 `CODEX_VERSION` 和 `CodexClientVersion`，只改一处会使发布失败。[候选镜像验收](codex-gateway-e2e.md#镜像与分机验证) · [Codex 构建版本](../docker/Dockerfile.workspace) · [控制面客户端版本](../apps/api/internal/codexupstream/client.go)
+Workspace 镜像在两种架构的原生 runner 上分别构建，核对镜像内 `codex --version` 与控制面固定的 `codexupstream.CodexClientVersion` 一致，再运行网关受控验收。两种架构均通过且 APP 镜像均构建成功后，工作流先发布 workspace 的多架构标签，再发布 APP 标签。升级 Codex 时同步修改 `docker/Dockerfile.workspace` 的 `CODEX_VERSION` 和 `CodexClientVersion`，只改一处会使发布失败。[候选镜像验收](codex-gateway-e2e.md#镜像与分机验证) · [Codex 构建版本](../docker/Dockerfile.workspace) · [控制面客户端版本](../apps/api/internal/codexupstream/client.go)
 
 ### 默认工作镜像
 
-预构建的 `cloudex-api` 默认引用同一次发布的 `cloudex-workspace`。例如 `cloudex-api:v0.0.4` 内置 `ghcr.io/coachpo/cloudex-workspace:0.0.4`，手动构建内置对应的 `manual-<完整提交>` 标签。在各 Host 拉取控制面实际使用的镜像引用，并在控制台确认镜像就绪。控制面只检查 Host 上已有的镜像。
+预构建的 `cloudex-api` 默认引用同一提交的 `ghcr.io/coachpo/cloudex-workspace:sha-<完整提交>`，手动构建引用 `manual-<完整提交>`。在各 Host 拉取控制面实际使用的镜像引用，并在控制台确认镜像就绪。控制面只检查 Host 上已有的镜像。
 
 从源码使用 Compose 构建时，`CLOUDEX_WORKSPACE_IMAGE` 同时指定工作镜像的构建标签和 `api` 内置的默认引用，默认值为 `cloudex/workspace:local`。修改后重新构建 `workspace-image` 和 `api`。[Compose 配置](../compose.yaml) · [环境变量示例](../.env.example)
 

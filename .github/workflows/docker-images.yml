@@ -13,6 +13,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
+  REVISION_TAG: ${{ github.event_name == 'push' && format('sha-{0}', github.sha) || format('manual-{0}', github.sha) }}
 
 jobs:
   verify:
@@ -97,12 +98,12 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          flavor: &release_flavor latest=false
           tags: &release_tags |
             type=ref,event=tag,enable=${{ github.event_name == 'push' }}
             type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
-            type=sha,format=long,enable=${{ github.event_name == 'push' }}
-            type=sha,format=long,prefix=manual-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ env.REVISION_TAG }},priority=100
             type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push ${{ matrix.image }} for ${{ matrix.platform }}
@@ -113,7 +114,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
-          build-args: ${{ matrix.image == 'cloudex-api' && format('CLOUDEX_WORKSPACE_IMAGE={0}/{1}/cloudex-workspace:{2}', env.REGISTRY, github.repository_owner, steps.meta.outputs.version) || '' }}
+          build-args: ${{ matrix.image == 'cloudex-api' && format('CLOUDEX_WORKSPACE_IMAGE={0}/{1}/cloudex-workspace:{2}', env.REGISTRY, github.repository_owner, env.REVISION_TAG) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
@@ -174,6 +175,7 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/cloudex-workspace
+          flavor: *release_flavor
           tags: *release_tags
 
       # Export both copies from one build so the published image is the one tested.
@@ -247,20 +249,18 @@ jobs:
     needs: [build, workspace]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    concurrency:
+      group: cloudex-image-publication
+      queue: max
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: true
-      matrix:
-        image: [cloudex-api, cloudex-agent, cloudex-web, cloudex-workspace]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-${{ matrix.image }}-*
-          merge-multiple: true
+          pattern: digests-*
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -276,18 +276,34 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          flavor: *release_flavor
           tags: *release_tags
 
-      # Without attestations each tag is an index of the platform manifests only,
-      # so a deployment pins one digest per image and Docker selects the platform.
+      # Make the workspace tag available before publishing any API that references it.
       - name: Push multi-platform tags
         working-directory: ${{ runner.temp }}/digests
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          NAMESPACE: ${{ env.REGISTRY }}/${{ github.repository_owner }}
+          TAG_NAMES: ${{ steps.meta.outputs.tag-names }}
           VERSION: ${{ steps.meta.outputs.version }}
+        shell: bash
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "$IMAGE@sha256:%s " *)
-          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          shopt -s nullglob
+          for name in cloudex-workspace cloudex-api cloudex-agent cloudex-web; do
+            image="$NAMESPACE/$name"
+            sources=()
+            for arch in amd64 arm64; do
+              digests=(digests-"$name"-"$arch"/*)
+              if [[ ${#digests[@]} -ne 1 ]]; then
+                echo "Expected one digest for $name on linux/$arch" >&2
+                exit 1
+              fi
+              sources+=("$image@sha256:${digests[0]##*/}")
+            done
+            tags=()
+            while IFS= read -r tag; do
+              tags+=(-t "$image:$tag")
+            done <<< "$TAG_NAMES"
+            docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+            docker buildx imagetools inspect "$image:$VERSION"
+          done
