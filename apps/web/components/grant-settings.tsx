@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { grantProblem } from "@/lib/i18n";
 import { useT } from "@/components/i18n-provider";
 import { GrantActionDialog } from "@/components/grant-action-dialog";
-import { Empty, Facts, Loading, Notice, Status } from "@/components/shared";
+import { CopyButton, Empty, Facts, Loading, Notice, Status, useCopyText } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { APIError, api, change, wsPath } from "@/lib/api";
 import {
@@ -64,6 +64,7 @@ export function GrantSettings() {
   const device = started?.device;
   const replacing = grantList.find(grant => grant.id === start.variables?.grant_id);
   const attemptID = started?.id ?? "";
+  const deviceClipboard = useCopyText(device?.user_code ?? "", attemptID);
   const attemptHeading = useRef<HTMLHeadingElement>(null);
   const callbackInput = useRef<HTMLInputElement>(null);
   const [callbackSubmitting, setCallbackSubmitting] = useState(false);
@@ -220,14 +221,18 @@ export function GrantSettings() {
         showProvider && <>
           {device ? <>
             <p id="grant-device-code-instructions" className="form-note">{t("grantDeviceCodeInstructions")}</p>
-            <Facts items={[[t("grantDeviceCode"), <code className="wide-code font-semibold">{device.user_code}</code>]]}/>
+            <Facts items={[[t("grantDeviceCode"), <div className="actions">
+              <code className="wide-code select-all font-semibold">{device.user_code}</code>
+              <CopyButton label={t("copyDeviceCode")} clipboard={deviceClipboard} manualMessage="copyDeviceCodeManually"/>
+            </div>]]}/>
           </> : <p className="form-note">{t("grantCallbackTunnel")}</p>}
           <p role={device ? undefined : "status"} className="form-note">{t("grantAuthorizationPending")}</p>
         </>}
       <div className="actions">
         {attemptState === "ready" ? <Button type="button" onClick={() => confirm.mutate(started.id)}
           disabled={busy || attempt.isError || checkingConfirmation}>{t("grantConfirm")}</Button> :
-          showProvider && <Button asChild><a href={device ? device.verification_url : started.authorization_url}
+          showProvider && <Button asChild className={device ? "h-auto min-h-9 max-w-full whitespace-normal py-2 text-start max-sm:h-auto max-sm:min-h-11" : undefined}>
+            <a href={device ? device.verification_url : started.authorization_url} onClick={device ? deviceClipboard.copy : undefined}
             aria-describedby={device ? "grant-device-code-instructions" : undefined} target="_blank" rel="noopener noreferrer">
             {t(device ? "grantOpenDeviceVerification" : "grantOpenSignIn")} <ArrowUpRight data-icon="inline-end"/>
           </a></Button>}

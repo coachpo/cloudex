@@ -2,8 +2,8 @@
 
 import { useT } from "@/components/i18n-provider";
 import Link from "next/link";
-import { CircleAlert, Plus, type LucideIcon } from "lucide-react";
-import { Fragment, type ReactNode, type Ref } from "react";
+import { CircleAlert, Copy, Plus, type LucideIcon } from "lucide-react";
+import { Fragment, useRef, useState, type ReactNode, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { APIError, hostWorkspacePath, noResponseMessage } from "@/lib/api";
 import { localizeProblem, statusName } from "@/lib/i18n";
@@ -96,6 +96,42 @@ export function NewWorkspace({ hostID }: { hostID?: string }) {
 
 export function Facts({items}: {items: [string, ReactNode][]}) {
   return <dl className="fact-list">{items.map(([label,value]) => <Fragment key={label}><dt>{label}</dt><dd>{value ?? "—"}</dd></Fragment>)}</dl>;
+}
+
+export function useCopyText(value: string, source = value) {
+  const [result, setResult] = useState<{ source: string; copied: boolean }>();
+  const latestCopy = useRef(0);
+
+  async function copy() {
+    const request = ++latestCopy.current;
+    let copied: boolean;
+    try {
+      await navigator.clipboard.writeText(value);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+    if (request === latestCopy.current) setResult({ source, copied });
+  }
+
+  return { copy, copied: result?.source === source ? result.copied : undefined };
+}
+
+export function CopyButton({ label, clipboard, manualMessage = "copyManually" }: {
+  label: string;
+  clipboard: ReturnType<typeof useCopyText>;
+  manualMessage?: "copyManually" | "copyDeviceCodeManually";
+}) {
+  const { t } = useT();
+  const { copy, copied } = clipboard;
+  return <>
+    <Button type="button" variant="outline" size="sm" onClick={copy}>
+      <Copy aria-hidden="true" data-icon="inline-start"/>{label}
+    </Button>
+    <span className={copied ? "confirm" : "small muted"} role="status">
+      {copied === undefined ? "" : t(copied ? "copied" : manualMessage)}
+    </span>
+  </>;
 }
 
 export function Meter({ value, total, label, warnWhenFull = false, level }: {

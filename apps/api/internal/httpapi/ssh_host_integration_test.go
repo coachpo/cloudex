@@ -168,7 +168,7 @@ func TestSSHHostWorkspaceAccess(t *testing.T) {
 		return view
 	}
 	initial := access()
-	endpoint := connectGatewayWorkspace(t, initial, listener.Addr().String(), admin)
+	endpoint := connectGatewayWorkspace(t, id, initial, listener.Addr().String(), admin)
 	shell, err := endpoint.NewSession()
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestSSHHostWorkspaceAccess(t *testing.T) {
 	if next.Fingerprint != initial.Fingerprint {
 		t.Fatal("Reset replaced the Workspace SSH host key")
 	}
-	resumed := connectGatewayWorkspace(t, next, listener.Addr().String(), admin)
+	resumed := connectGatewayWorkspace(t, id, next, listener.Addr().String(), admin)
 	resumed.Close()
 	var deletion acceptance
 	api.call("DELETE", path, map[string]any{"confirm": id, "purge": true}, 202, &deletion)
@@ -266,7 +266,7 @@ func TestSSHHostWorkspaceAccess(t *testing.T) {
 	t.Log("Disable closed active tunnel; resumed Host completed Stop, Start, Rebuild, Reset and Delete")
 }
 
-func connectGatewayWorkspace(t *testing.T, view control.Access, address string, admin ssh.Signer) *ssh.Client {
+func connectGatewayWorkspace(t *testing.T, id string, view control.Access, address string, admin ssh.Signer) *ssh.Client {
 	t.Helper()
 	_, _, outer, _, rest, err := ssh.ParseKnownHosts([]byte(view.KnownHosts))
 	if err != nil {
@@ -276,12 +276,13 @@ func connectGatewayWorkspace(t *testing.T, view control.Access, address string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	jump, err := sshClient(address, view.Alias, outer, ssh.PublicKeys(admin))
+	identity := remote.WorkspaceIdentity(id)
+	jump, err := sshClient(address, identity, outer, ssh.PublicKeys(admin))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { jump.Close() })
-	target := net.JoinHostPort(view.Alias, strconv.Itoa(remote.BackendPort))
+	target := net.JoinHostPort(identity, strconv.Itoa(remote.BackendPort))
 	channel, err := jump.Dial("tcp", target)
 	if err != nil {
 		t.Fatal(err)

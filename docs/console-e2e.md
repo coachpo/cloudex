@@ -14,7 +14,7 @@
 
 | 场景与前置数据 | 操作 | 预期结果与判定证据 |
 |---|---|---|
-| U1 浏览列表与小屏布局。准备 64 字符连续 Host/Workspace 名和 128 字符分支，查看非空列表、Host 详情、新建页、设置、Logs 和 Git | 在 320×720、1100×720 下逐页检查 `document.documentElement.scrollWidth`。从全新加载的 Workspaces 按 Tab、Enter；再用 Tab 进入 Filter by state，操作筛选。320×400 打开长名 Host 的 Disable host 对话框并按 Escape；在 Settings 从 Save account 按 Tab 到 Default workspace image，先将后者滚到靠近底栏。 | 页面宽度不超过视口；首个 Tab 显示 Skip to main content，Enter 后焦点为唯一 main。筛选组有可访问名称、改变选中状态，焦点环未被滚动边缘裁掉。对话框长标题在框内换行，初始焦点 Keep host，Esc 后回 Disable host，Host 状态不变；底栏上方可见完整的聚焦输入框。 |
+| U1 浏览列表与小屏布局。准备 64 字符连续 Host/Workspace 名和 128 字符分支，查看非空列表、Host 详情、新建页、设置、Logs 和 Git | 在 320×720、1100×720 下逐页检查 `document.documentElement.scrollWidth`。在新建页查看预填名称，点击 Generate a random name 后编辑名称并移开焦点。从全新加载的 Workspaces 按 Tab、Enter；再用 Tab 进入 Filter by state，操作筛选。320×400 打开长名 Host 的 Disable host 对话框并按 Escape；在 Settings 从 Save account 按 Tab 到 Default workspace image，先将后者滚到靠近底栏。 | 页面宽度不超过视口。新建页预填 `<形容词>-<名词>`，骰子生成不同的名称，输入后保留手动编辑。首个 Tab 显示 Skip to main content，Enter 后焦点为唯一 main。筛选组有可访问名称、改变选中状态，焦点环未被滚动边缘裁掉。对话框长标题在框内换行，初始焦点 Keep host，Esc 后回 Disable host，Host 状态不变；底栏上方可见完整的聚焦输入框。 |
 | U2 接入 Host。准备仅供测试的 SSH Host 地址与已核对的指纹，另备未完成注册的非本机 Agent Host | 从 Hosts 用 Enter 打开 Add host，Tab 进入连接方式，左右键切 Agent/Direct SSH。填测试地址，Get host fingerprint，点 Check fingerprint again，再 Cancel。另打开 Agent 表单签发注册令牌、完成面板；从可重发令牌的 Host 详情及 SSH Host 的更新凭据入口分别打开并关闭。 | 打开时焦点进面板标题；方向键改变单选且焦点留在选项；重新检查回到获取指纹按钮，取消返回 Add host。签发后焦点到 Connect host agent 标题，证据避开令牌值。详情页关闭后回触发按钮；若登记状态已使触发项消失，则回 Host 标题。核对每步活动元素与当前展开状态。 |
 | U3 从 Access 页复制 SSH 信息。运行中、已有公钥，Gateway ready | 分别复制 known_hosts 和 SSH config，比对剪贴板与页面文本。禁止写剪贴板（或仅令浏览器的 writeText 拒绝），再试两按钮并手动选择文本。保持页面挂载，仅在下一次 access GET 的响应中改变相应文本；再让下一次刷新返回带唯一测试消息的 409，随后放行真实 GET 并重试。 | 成功能读回完整内容；写入失败时出现“请选择下方文本手动复制”对应提示，文本仍可复制。文本改变后旧结果消失；已有数据时刷新失败仅有一个对应 alert，恢复后显示当前状态。记录四次复制结果和刷新前后的状态区域。 |
 | U4 在真实终端重连。Workspace 运行，WebSocket 可用 | 进入 Terminal 并输出一条唯一标记。从 Terminal input 按 Shift+Tab，再用 Enter 激活 Reconnect；观察新连接，返回输入区执行 `pwd` 和第二条标记。 | Shift+Tab 恰好到 Reconnect。真实 WS 重新建立、状态回 Connected，第二次命令确实回显结果（例如用 `printf '%s%s\n' e2e- reconnected`），确认新 PTY 可交互。 |
@@ -32,7 +32,15 @@
 |---|---|---|
 | [Host 删除回执丢失](../apps/web/tests/host-removal.browser.js) | 在 Host 详情确认删除，丢弃 DELETE 回执。分别让后续详情读取返回 `404`、返回原登记，或持续失败。 | `404` 时显示已移除，Hosts 列表和 Workspace 放置选项均移除该 Host。查到原登记时允许重试。读取失败时显示结果待确认，重新检查仅发读取请求。 |
 | [Codex 授权保存失败](../apps/web/tests/grants.browser.js) | 到达授权确认页，令保存返回带具体错误的 `409`。暂挂随后的状态查询，再以 `404` 结束查询。 | 暂挂期间立即显示原错误，允许取消，保存按钮停用。收到 `404` 后撤下保存按钮，原错误仍可见。 |
+| [Codex 设备码复制](../apps/web/tests/grants.browser.js) | 拦截授权创建、轮询和取消的请求，返回测试码，拦截验证页导航。单击设备码和复制按钮，模拟剪贴板写入被拒绝，再点击 Copy code and open verification page。 | 单击选中完整代码，复制按钮和验证链接均写入原设备码。写入被拒绝时显示手动复制提示。验证链接同时在新标签页打开夹具返回的 URL。 |
 
 ## 当前验收记录
 
-尚无通过记录。按[验证改动](../CONTRIBUTING.md#验证改动)，所有场景视为受影响；场景通过后在此逐场景写入通过提交、环境和证据。
+以下结果以 `44d7793e37b248dcb349ea24072be33fb77d4f11` 为基线，由未提交工作区构建。验收环境为本机 `colima-cloudex-real-e2e` context 的 `cloudex` Compose 项目。尚无已验收提交。
+
+| 范围 | 本轮证据 |
+|---|---|
+| U1 新建页 | Chromium 158 实测预填 `high-birch`，骰子换为 `cool-ridge`，手动编辑和清空均保留。320px 下 `scrollWidth` 为 320。 |
+| SSH 别名显示 | Chromium 158 从实际 Access 页读到「SSH 别名」和 `cloudex-http-gateway-check`。 |
+| U3 SSH 复制 | Chromium 158 的 Playwright 夹具分别读回完整的两种 SSH 文本。模拟拒绝时两处均显示手动复制提示，文本可选中，刷新后旧反馈清空。模拟刷新失败出现单个错误，恢复后错误消失。 |
+| Codex 设备码复制 | Chromium 158 的 Playwright 夹具中，选区和两种复制操作均读回 `TEST-1234`，新标签打开夹具验证页，模拟拒绝时显示 `Select the device code to copy it manually.`。有界面的 Chromium 153 在 320px 下对 `TEST-0001` 至 `TEST-0010` 重复验证，10 次均复制对应代码并打开夹具验证页。 |

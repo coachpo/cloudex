@@ -238,10 +238,32 @@ async page => {
     await keys.fill("ssh-ed25519 fixture Draft");
     check(await keysSaved.count() === 0, "An unsaved draft still displayed the public-key save confirmation");
 
+    await page.setViewportSize({ width: 320, height: 720 });
     await page.goto(origin + "/workspaces/new");
     await page.getByLabel("Target host", { exact: true }).selectOption(host.id);
     const name = page.getByLabel("Workspace name", { exact: true });
     const create = page.getByRole("button", { name: "Create workspace", exact: true });
+    await page.waitForFunction(() => !!document.querySelector("#name")?.value);
+    const suggestedName = await name.inputValue();
+    const roll = page.getByRole("button", { name: "Generate a random name", exact: true });
+    await roll.click();
+    const rerolledName = await name.inputValue();
+    check([suggestedName, rerolledName].every(value => /^[a-z]+-[a-z]+$/.test(value)) && suggestedName !== rerolledName,
+      "The name field did not start with a valid suggestion and change when rerolled");
+    check(createAttempts.length === 0, "Generating a workspace name submitted the form");
+    const newWorkspaceLayout = await page.evaluate(() => ({ viewport: innerWidth, pageWidth: document.documentElement.scrollWidth }));
+    check(newWorkspaceLayout.viewport === 320 && newWorkspaceLayout.pageWidth <= newWorkspaceLayout.viewport,
+      "Rerolling the workspace name overflowed a narrow viewport");
+    const cores = page.locator("#cores");
+    const initialCores = await cores.inputValue();
+    const manualName = "manual workspace draft";
+    await name.fill(manualName);
+    await cores.fill("3");
+    check(await name.inputValue() === manualName, "Updating workspace resources overwrote the manually edited name");
+    await name.clear();
+    await cores.fill(initialCores);
+    check(await name.inputValue() === "", "Updating workspace resources repopulated a cleared name");
+    await page.setViewportSize({ width: 1100, height: 720 });
     const unicodeName = String.fromCodePoint(0x10400).repeat(64);
     await name.focus();
     await page.keyboard.insertText(unicodeName);
@@ -264,25 +286,54 @@ async page => {
       "Workspace creation did not submit the normalized name and repository credential on both attempts");
 
     await page.getByText("Gateway ready", { exact: true }).waitFor();
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+    const clipboardContext = page.context();
+    const access = data["/workspaces/fixture/access"];
+    const sshCopy = [
+      { label: "Copy known_hosts entries", value: access.known_hosts },
+      { label: "Copy SSH config", value: access.ssh_config },
+    ].map(({ label, value }) => {
+      const button = page.getByRole("button", { name: label, exact: true });
+      return { button, status: button.locator("..").getByRole("status"), value };
+    });
+    await clipboardContext.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
     try {
-      const copy = page.getByRole("button", { name: "Copy known_hosts entries", exact: true });
-      await copy.click();
-      const copied = page.getByText("Copied", { exact: true });
-      await copied.waitFor();
-      const access = data["/workspaces/fixture/access"];
-      check(await page.evaluate(() => navigator.clipboard.readText()) === access.known_hosts, "Copied SSH text differs from the displayed entries");
-      access.known_hosts = "fixture ssh-ed25519 updated";
-      await page.getByText(access.known_hosts, { exact: true }).waitFor();
-      check(await copied.count() === 0, "Updated SSH entries still displayed the previous copy confirmation");
+      for (const { button, status, value } of sshCopy) {
+        await button.click();
+        await status.filter({ hasText: /^Copied$/ }).waitFor();
+        check(await page.evaluate(() => navigator.clipboard.readText()) === value, "Copied SSH text differs from the displayed entries");
+      }
     } finally {
-      await page.context().clearPermissions();
+      await clipboardContext.clearPermissions();
+    }
+    const restoreClipboard = await page.evaluateHandle(() => {
+      const writeText = navigator.clipboard.writeText;
+      navigator.clipboard.writeText = async () => { throw new DOMException("Fixture write rejected", "NotAllowedError"); };
+      return () => { navigator.clipboard.writeText = writeText; };
+    });
+    try {
+      for (const { button, status, value } of sshCopy) {
+        await button.click();
+        await status.filter({ hasText: "Select the text below to copy it manually." }).waitFor();
+        await page.getByText(value, { exact: true }).selectText();
+        check(await page.evaluate(() => window.getSelection()?.toString()) === value, "SSH text could not be selected for manual copying");
+      }
+    } finally {
+      await restoreClipboard.evaluate(restore => restore());
+      await restoreClipboard.dispose();
+    }
+    access.known_hosts = "fixture ssh-ed25519 updated";
+    access.ssh_config = "Host fresh-fixture";
+    await page.getByText(access.known_hosts, { exact: true }).waitFor();
+    await page.getByText(access.ssh_config, { exact: true }).waitFor();
+    for (const { status } of sshCopy) {
+      check((await status.textContent()).trim() === "", "Updated SSH entries still displayed the previous copy result");
     }
     failAccess = true;
     const refreshErrors = page.getByRole("alert").filter({ hasText: "Access refresh fixture failure" });
     await refreshErrors.first().waitFor();
     check(await refreshErrors.count() === 1, "A failed Access refresh displayed duplicate alerts");
     failAccess = false;
+    await refreshErrors.first().waitFor({ state: "hidden" });
 
     for (const [path, labels] of [
       ["/workspaces/fixture/logs", ["Container logs"]],
@@ -460,7 +511,11 @@ async page => {
     await page.getByRole("button", { name: "Create administrator" }).click();
     await page.waitForURL(origin + "/workspaces");
     check(setupPosts === 1, "The corrected administrator setup was not submitted exactly once");
-    return "PASS console layout at 320/641/1100/1280px and long usernames at navigation breakpoints, mobile navigation, zero-capacity meters, keyboard/menu/dialog focus, settings saves and loading/error recovery, workspace create retry, SSH copy and alerts, logs, 404, Git text and cancellation, empty-list retry, forced colors and password validation. Delete confirmation contrast (normal/hover): " + themeRatios.join(", ");
+    return {
+      newWorkspace: { suggestedName, rerolledName, manualName, clearPreserved: true, sameRetryKey: first.key === retry.key, ...newWorkspaceLayout },
+      sshCopy: sshCopy.map(({ value }) => value),
+      deleteConfirmationContrast: themeRatios,
+    };
   } finally {
     await page.unroute(apiPattern);
     await page.emulateMedia({ colorScheme: null, reducedMotion: null, forcedColors: null });

@@ -132,22 +132,22 @@ func TestGatewayForwardsOnlyToTheAuthenticatedWorkspace(t *testing.T) {
 		return strings.TrimSpace(name), err
 	}
 
-	for _, user := range []string{Alias(second), "coder", first, Alias(strings.ToUpper(first))} {
+	for _, user := range []string{WorkspaceIdentity(second), "coder", first, WorkspaceIdentity(strings.ToUpper(first))} {
 		if client, err := login(user, firstKey); err == nil {
 			client.Close()
 			t.Fatalf("gateway accepted the first workspace's key for login %q", user)
 		}
 	}
-	client, err := login(Alias(first), firstKey)
+	client, err := login(WorkspaceIdentity(first), firstKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	own := net.JoinHostPort(Alias(first), "2222")
+	own := net.JoinHostPort(WorkspaceIdentity(first), "2222")
 	if name, err := reach(client, own); err != nil || name != "first" {
 		t.Fatalf("authorized workspace was not reachable: %q %v", name, err)
 	}
-	for _, destination := range []string{net.JoinHostPort(Alias(second), "2222"), net.JoinHostPort(Alias(first), "22"), secondEndpoint.String(), "localhost:2222"} {
+	for _, destination := range []string{net.JoinHostPort(WorkspaceIdentity(second), "2222"), net.JoinHostPort(WorkspaceIdentity(first), "22"), secondEndpoint.String(), "localhost:2222"} {
 		if name, err := reach(client, destination); err == nil {
 			t.Fatalf("gateway forwarded %s to %q for the first workspace's key", destination, name)
 		}
@@ -160,12 +160,12 @@ func TestGatewayForwardsOnlyToTheAuthenticatedWorkspace(t *testing.T) {
 		forward.Close()
 		t.Fatal("gateway accepted a remote forward")
 	}
-	other, err := login(Alias(second), secondKey)
+	other, err := login(WorkspaceIdentity(second), secondKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if name, err := reach(other, net.JoinHostPort(Alias(second), "2222")); err != nil || name != "second" {
+	if name, err := reach(other, net.JoinHostPort(WorkspaceIdentity(second), "2222")); err != nil || name != "second" {
 		t.Fatalf("second workspace was not reachable with its own key: %q %v", name, err)
 	}
 

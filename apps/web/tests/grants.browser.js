@@ -56,7 +56,7 @@ async page => {
   const fail = (route, status, code, message, details) => route.fulfill({ status, json: { error: { code, message, details } } });
   const context = page.context();
   const provider = origin + "/fake-provider-login";
-  const verification = "https://auth.openai.com/codex/device";
+  const verification = "https://device-verification.example.test/codex/device";
   const userCode = "TEST-1234";
   await context.route(provider, route => {
     callbackReturned = true;
@@ -204,7 +204,7 @@ async page => {
 
     const deviceSignIn = settings.getByRole("button", { name: "Sign in with Codex using a device code", exact: true });
     await deviceSignIn.click();
-    const verificationLink = settings.getByRole("link", { name: "Open verification page", exact: true });
+    const verificationLink = settings.getByRole("link", { name: "Copy code and open verification page", exact: true });
     await verificationLink.waitFor();
     expect(started.channel === "codex" && started.method === "device_code" && !started.grant_id, "The device entry did not select Codex Device Code");
     const pasteCallback = settings.getByText("Paste callback URL", { exact: true });
@@ -214,11 +214,82 @@ async page => {
     await code.waitFor();
     expect(await loopbackInstructions.count() === 0, "Device sign-in showed loopback instructions");
     await page.setViewportSize({ width: 320, height: 720 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= 320), "The device prompt overflowed a narrow viewport");
+    const deviceLayout = await page.evaluate(() => ({ viewport: innerWidth, pageWidth: document.documentElement.scrollWidth }));
+    expect(deviceLayout.pageWidth <= deviceLayout.viewport, "The device prompt overflowed a narrow viewport");
     await page.setViewportSize({ width: 1100, height: 720 });
+    await code.click();
+    const selectedCode = await page.evaluate(() => window.getSelection()?.toString());
+    expect(selectedCode === userCode, "Clicking the device code did not select it in full");
+
+    const copied = settings.getByRole("status").filter({ hasText: /^Copied$/ });
+    const copyDeviceCode = settings.getByRole("button", { name: "Copy device code", exact: true });
+    async function readClipboard(tab) {
+      await context.grantPermissions(["clipboard-read"], { origin: new URL(tab.url()).origin });
+      try {
+        return await tab.evaluate(() => navigator.clipboard.readText());
+      } finally {
+        await context.clearPermissions();
+      }
+    }
+    const manualCopy = settings.getByRole("status").filter({ hasText: "Select the device code to copy it manually." });
+    const clipboardFixture = await page.evaluateHandle(() => {
+      const clipboard = navigator.clipboard;
+      const writeText = clipboard.writeText;
+      const rejection = () => new DOMException("Fixture write rejected", "NotAllowedError");
+      let rejectPending;
+      return {
+        deny: () => { clipboard.writeText = () => Promise.reject(rejection()); },
+        delayNext: () => {
+          clipboard.writeText = () => {
+            clipboard.writeText = writeText;
+            return new Promise((_, reject) => { rejectPending = reject; });
+          };
+        },
+        rejectDelayed: async () => {
+          rejectPending(rejection());
+          // Allow the clipboard promise and the resulting React render to settle.
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        },
+        restore: () => { clipboard.writeText = writeText; },
+      };
+    });
+    let buttonClipboard, manualCopyText, overlappingCopyText;
+    try {
+      await clipboardFixture.evaluate(fixture => fixture.delayNext());
+      await copyDeviceCode.click();
+      await copyDeviceCode.click();
+      await copied.waitFor();
+      buttonClipboard = await readClipboard(page);
+      expect(buttonClipboard === userCode, "The copy button did not write the device code");
+      await clipboardFixture.evaluate(fixture => fixture.rejectDelayed());
+      overlappingCopyText = (await copyDeviceCode.locator("..").getByRole("status").textContent()).trim();
+      expect(overlappingCopyText === "Copied", "A delayed clipboard rejection replaced a newer copy confirmation: " + overlappingCopyText);
+      await clipboardFixture.evaluate(fixture => fixture.deny());
+      await copyDeviceCode.click();
+      await manualCopy.waitFor();
+      manualCopyText = (await manualCopy.textContent()).trim();
+    } finally {
+      await clipboardFixture.evaluate(fixture => fixture.restore());
+      await clipboardFixture.dispose();
+    }
+
+    let linkClipboard, verificationURL;
     async function completeFakeDeviceSignIn() {
+      await context.grantPermissions(["clipboard-write"], { origin });
+      try {
+        await page.evaluate(() => navigator.clipboard.writeText("before opening verification"));
+      } finally {
+        await context.clearPermissions();
+      }
       const [deviceVerification] = await Promise.all([page.waitForEvent("popup"), verificationLink.click()]);
-      await deviceVerification.getByLabel("Enter the user code").fill(await code.textContent());
+      const verificationInput = deviceVerification.getByLabel("Enter the user code");
+      await verificationInput.waitFor();
+      verificationURL = deviceVerification.url();
+      expect(verificationURL === verification, "The new tab did not navigate to the device verification URL");
+      await copied.waitFor();
+      linkClipboard = await readClipboard(deviceVerification);
+      expect(linkClipboard === userCode, "Opening the verification page did not write the device code");
+      await verificationInput.fill(linkClipboard);
       await deviceVerification.getByRole("button", { name: "Authorize" }).click();
       await deviceVerification.getByText("Device authorization accepted", { exact: true }).waitFor();
       await deviceVerification.close();
@@ -379,7 +450,10 @@ async page => {
     await dialog.getByRole("button", { name: "Delete authorization", exact: true }).click();
     await cardB.waitFor({ state: "hidden" });
     expect(removed === 1 && grants[0] === a, "Deleting the unbound grant also affected the other channel");
-    return { confirmed, deviceConfirmed, deviceCancelled, manualConfirmed, requestedRevisions, rotated, revoked, removed };
+    return {
+      confirmed, deviceConfirmed, deviceCancelled, manualConfirmed, requestedRevisions, rotated, revoked, removed,
+      deviceCopy: { selectedCode, buttonClipboard, linkClipboard, verificationURL, manualCopyText, overlappingCopyText, ...deviceLayout },
+    };
   } finally {
     releaseConflictRead();
     await context.unroute(pattern);

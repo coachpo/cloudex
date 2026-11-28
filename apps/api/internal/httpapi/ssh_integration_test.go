@@ -146,6 +146,7 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 	}
 	rotate(line)
 	ready := get("ready")
+	identity := remote.WorkspaceIdentity(created.Workspace)
 	if ready.Port != conf.Port || !strings.Contains(ready.SSHConfig, "ProxyJump "+ready.Alias+"-gateway") || ready.ProjectPath != "/workspace/project" {
 		t.Fatalf("connection metadata: %+v", ready)
 	}
@@ -154,13 +155,13 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 		t.Fatalf("gateway known_hosts mismatch: %v", e)
 	}
 	_, hosts, hostKey, _, _, e := ssh.ParseKnownHosts(rest)
-	if e != nil || len(hosts) != 1 || hosts[0] != ready.Alias || ready.Fingerprint != ssh.FingerprintSHA256(hostKey) {
+	if e != nil || len(hosts) != 1 || hosts[0] != identity || ready.Fingerprint != ssh.FingerprintSHA256(hostKey) {
 		t.Fatalf("known_hosts mismatch: %v", e)
 	}
 	addr := fmt.Sprintf("127.0.0.1:%d", ready.Port)
-	backend := net.JoinHostPort(ready.Alias, strconv.Itoa(remote.BackendPort))
+	backend := net.JoinHostPort(identity, strconv.Itoa(remote.BackendPort))
 	dial := func(key ssh.Signer, user string, auth ...ssh.AuthMethod) (*ssh.Client, error) {
-		jump, e := sshClient(addr, ready.Alias, jumpKey, ssh.PublicKeys(key))
+		jump, e := sshClient(addr, identity, jumpKey, ssh.PublicKeys(key))
 		if e != nil {
 			return nil, e
 		}
@@ -192,12 +193,12 @@ func TestDockerWorkspaceRemoteSSH(t *testing.T) {
 			t.Fatalf("unexpected SSH access as %s", user)
 		}
 	}
-	jump, e := sshClient(addr, ready.Alias, jumpKey, ssh.PublicKeys(first))
+	jump, e := sshClient(addr, identity, jumpKey, ssh.PublicKeys(first))
 	if e != nil {
 		t.Fatal(e)
 	}
 	defer jump.Close()
-	for _, target := range []string{"localhost:2222", ready.Alias + ":22", "cloudex-" + strings.Repeat("a", 32) + ":2222"} {
+	for _, target := range []string{"localhost:2222", identity + ":22", "cloudex-" + strings.Repeat("a", 32) + ":2222"} {
 		if socket, e := jump.Dial("tcp", target); e == nil {
 			socket.Close()
 			t.Fatalf("gateway allowed other destination %s", target)

@@ -64,6 +64,76 @@ func TestSSHClientConfigUsesCurrentHostSetting(t *testing.T) {
 	assertHost("127.0.0.1")
 }
 
+func TestSSHClientConfigSeparatesHostAliasFromWorkspaceIdentity(t *testing.T) {
+	const id = "9659fa2a889fc2bbad8ef990a2b45e3a"
+	const identity = "cloudex-" + id
+	for _, tc := range []struct {
+		name  string
+		alias string
+	}{
+		{name: "http-gateway-check", alias: "cloudex-http-gateway-check"},
+		{name: "HTTP_Gateway.Check", alias: "cloudex-http_gateway.check"},
+		{name: "A", alias: "cloudex-a"},
+		{name: "gateway check", alias: "cloudex-9659fa2a"},
+		{name: "工作区", alias: "cloudex-9659fa2a"},
+		{name: "Kelvin", alias: "cloudex-9659fa2a"},
+		{name: "gateway.", alias: "cloudex-9659fa2a"},
+		{name: "gateway_", alias: "cloudex-9659fa2a"},
+		{name: "gateway-", alias: "cloudex-9659fa2a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			c, _, ci := seedSSHWorkspace(t)
+			ci.ID = "alias-fixture-container"
+			c.SSH.Bind, c.SSH.Port = netip.MustParseAddr("127.0.0.1"), 2222
+			signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.GatewayKey, c.GatewayKeyAlias = signer.PublicKey(), "fixture-gateway"
+			public := string(ssh.MarshalAuthorizedKey(signer.PublicKey()))
+			c.Engine = recoveryEngine{
+				inspect: func(context.Context) (runtime.Container, error) { return *ci, nil },
+				hostKey: func() (string, error) { return public, nil },
+			}
+			w := store.Workspace{ID: id, Name: tc.name, Image: ci.ImageID, Branch: "main", CPU: 500, Memory: 512, Desired: "running"}
+			op, err := c.Store.Create(ctx, w, "", "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Store.FinishOp(ctx, op, "running", &store.Container{ID: ci.ID, ImageID: ci.ImageID, Generation: op.Target, Status: ci.State}, ""); err != nil {
+				t.Fatal(err)
+			}
+			access, err := c.Access(ctx, id)
+			if err != nil || access.Status != "ready" || access.Alias != tc.alias {
+				t.Fatalf("access alias for %q: %+v, %v", tc.name, access, err)
+			}
+			jump := tc.alias + "-gateway"
+			want := fmt.Sprintf(`Host %s
+    HostName 127.0.0.1
+    Port 2222
+    User %s
+    HostKeyAlias fixture-gateway
+    StrictHostKeyChecking yes
+
+Host %s
+    HostName %s
+    Port 2222
+    User coder
+    ProxyJump %s
+    HostKeyAlias %s
+    StrictHostKeyChecking yes
+`, jump, identity, tc.alias, identity, jump, identity)
+			if access.SSHConfig != want {
+				t.Errorf("SSH config =\n%s\nwant:\n%s", access.SSHConfig, want)
+			}
+			if want := "fixture-gateway " + public + identity + " " + public; access.KnownHosts != want {
+				t.Errorf("known_hosts = %q, want %q", access.KnownHosts, want)
+			}
+		})
+	}
+}
+
 func TestSSHRouteRequiresAuthorizedKeyAndCurrentContainer(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

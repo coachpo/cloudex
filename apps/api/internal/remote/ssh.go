@@ -23,6 +23,7 @@ type Config struct {
 }
 
 var hostLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+var workspaceHostName = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
 var workspaceID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var dockerNetwork = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 var mesh = netip.MustParsePrefix("100.64.0.0/10")
@@ -91,9 +92,18 @@ func Keys(values []string) ([]string, error) {
 	return out, nil
 }
 
-func Alias(id string) string { return "cloudex-" + id }
+const workspacePrefix = "cloudex-"
 
-func WorkspaceID(alias string) (string, bool) {
-	id, ok := strings.CutPrefix(alias, "cloudex-")
+func WorkspaceIdentity(id string) string { return workspacePrefix + id }
+
+func HostAlias(id, name string) string {
+	if workspaceHostName.MatchString(name) {
+		return workspacePrefix + strings.ToLower(name)
+	}
+	return workspacePrefix + id[:8]
+}
+
+func WorkspaceID(identity string) (string, bool) {
+	id, ok := strings.CutPrefix(identity, workspacePrefix)
 	return id, ok && workspaceID.MatchString(id)
 }

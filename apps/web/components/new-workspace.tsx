@@ -4,14 +4,15 @@ import { useT } from "@/components/i18n-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { hostName, statusName } from "@/lib/i18n";
 import { Empty, Loading, Meter, Notice, PageHeader } from "@/components/shared";
-import { Server, TriangleAlert } from "lucide-react";
+import { Dices, Server, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { APIError, canPlaceOnHost, change, GiB, hostListQuery, idempotencyKey, hostPlacementIssue, hostResourceFields, MiB, templatesQuery,
   workspaceOrHostNameMaxLength, type Accepted, type Host, type HostResources } from "@/lib/api";
+import { randomWorkspaceName } from "@/lib/workspace-name";
 
 export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
   const { t } = useT();
@@ -21,10 +22,15 @@ export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
   const hosts = useQuery(hostListQuery);
   const template = templates.data?.[0];
   const [selectedHost, setHost] = useState(initialHostID);
+  const [name, setName] = useState<string>();
   const [cores, setCores] = useState<string>();
   const [memory, setMemory] = useState<string>();
   const [disk, setDisk] = useState<string>();
   const request = useRef<{ payload: string; key: string } | null>(null);
+  useEffect(() => {
+    const generated = randomWorkspaceName();
+    setName(current => current ?? generated);
+  }, []);
   const host = hosts.data?.find(h => h.id === selectedHost);
   const eligible = (h: Host) => !!template && canPlaceOnHost(h, template.image);
   const resources = {
@@ -102,7 +108,15 @@ export function NewWorkspaceForm({ initialHostID }: { initialHostID: string }) {
           </section>
           <section className="panel form" aria-labelledby="new-workspace-identity">
             <div className="section-head mb-0"><h2 id="new-workspace-identity">{t("workspace")}</h2></div>
-            <Field className="fields"><FieldLabel htmlFor="name">{t("workspaceName")}</FieldLabel><input className="field" id="name" name="name" maxLength={workspaceOrHostNameMaxLength} required placeholder={t("workspaceNameExample")}/></Field>
+            <Field className="fields">
+              <FieldLabel htmlFor="name">{t("workspaceName")}</FieldLabel>
+              <div className="flex min-w-0 gap-2">
+                <input className="field min-w-0 flex-1" id="name" name="name" value={name ?? ""} onChange={e => setName(e.target.value)}
+                  maxLength={workspaceOrHostNameMaxLength} required placeholder={t("workspaceNameExample")}/>
+                <Button type="button" variant="outline" size="icon" aria-label={t("generateWorkspaceName")}
+                  onClick={() => setName(randomWorkspaceName(name))}><Dices aria-hidden="true"/></Button>
+              </div>
+            </Field>
             <label className="label-inline"><input type="checkbox" name="auto" defaultChecked/> {t("keepWorkspaceRunning")}</label>
           </section>
           <section className="panel form" aria-labelledby="new-workspace-repository">

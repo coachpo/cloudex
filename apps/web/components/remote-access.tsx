@@ -1,12 +1,11 @@
 "use client";
 
 import { Translation, useT } from "@/components/i18n-provider";
-import { useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import Link from "next/link";
-import { ArrowUpRight, Copy, KeyRound } from "lucide-react";
+import { ArrowUpRight, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Facts, Loading, Notice, Status } from "./shared";
+import { CopyButton, Facts, Loading, Notice, Status, useCopyText } from "./shared";
 import type { WorkspaceAccess } from "@/lib/api";
 import { localizeSSHMessage } from "@/lib/i18n";
 
@@ -14,15 +13,10 @@ const labels = {ready:"sshReady", applying:"sshApplying", stopped:"workspaceStop
   paused:"workspacePaused", unavailable:"unavailable"} as const;
 
 function CopyText({label,value}:{label:string;value:string}) {
-  const { t } = useT();
-  const [result, setResult] = useState<{ value: string; message: "copied" | "copyManually" }>();
+  const clipboard = useCopyText(value);
   return <div className="grid gap-2">
     <div className="actions">
-      <Button type="button" variant="outline" size="sm" onClick={async()=>{
-        try {await navigator.clipboard.writeText(value);setResult({ value, message: "copied" });}
-        catch {setResult({ value, message: "copyManually" });}
-      }}><Copy data-icon="inline-start"/>{label}</Button>
-      <span className={result?.value === value && result.message === "copied" ? "confirm" : "small muted"} role="status">{result?.value === value ? t(result.message) : ""}</span>
+      <CopyButton label={label} clipboard={clipboard}/>
     </div>
     <pre className="log" tabIndex={0}>{value}</pre>
   </div>;

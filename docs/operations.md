@@ -141,6 +141,8 @@ Agent 会在证书到期前自动续期。新证书用于重连，已有连接�
 3. 运行 `ssh <alias>` 验证完整链路。使用 Codex 时，在远端执行 `codex --version` 核对客户端，再按[授权绑定步骤](#添加授权和绑定-workspace)运行。
 4. 选择 **Add host in Codex Desktop**，或在桌面应用的 **Settings → Connections** 添加 SSH 别名，打开 `/workspace/project`。Desktop 启动远端 App Server，并使用该容器的 Codex 配置。SSH、终端和 Desktop 共用工作树，避免同时编辑同一文件。[Codex Remote SSH 指南](https://learn.chatgpt.com/docs/remote-connections#connect-to-an-ssh-host)
 
+使用名称作为 SSH 别名的 Workspace 删除后以同名重建，会沿用同一个 Host 名。用新配置替换 `~/.ssh/config` 中对应的两个旧 Host 块。
+
 ## 健康检查与排障
 
 - **控制面与 Host**　`/healthz` 只检查 HTTP 进程是否响应。在 **Hosts** 查看各 Host 的连接、最近观测和镜像就绪情况。SSH 直连失败时，按详情页错误检查地址连通性、主机公钥、登录凭据、远程 Docker CLI、socket 权限或工作网络。失联时已有容器继续运行，控制台保留最后观测。

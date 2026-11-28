@@ -52,7 +52,7 @@ func (c *Control) Access(ctx context.Context, id string) (Access, error) {
 		return Access{}, e
 	}
 	v := Access{HasPublicKeys: len(keys) > 0, Host: host, Bind: bind, Port: c.SSH.Port,
-		Alias: remote.Alias(w.ID), User: remote.User, ProjectPath: runtime.WorkDir}
+		Alias: remote.HostAlias(w.ID, w.Name), User: remote.User, ProjectPath: runtime.WorkDir}
 	switch {
 	case busy:
 		v.Status, v.Message = "applying", "Wait for the workspace operation to finish. A previous SSH session may still be active until replacement."
@@ -89,11 +89,12 @@ func (c *Control) Access(ctx context.Context, id string) (Access, error) {
 		v.Status = "ready"
 		v.Fingerprint = ssh.FingerprintSHA256(key)
 		v.GatewayFingerprint = ssh.FingerprintSHA256(c.GatewayKey)
-		v.KnownHosts = c.GatewayKeyAlias + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(c.GatewayKey))) + "\n" + v.Alias + " " + public
+		identity := remote.WorkspaceIdentity(w.ID)
+		v.KnownHosts = c.GatewayKeyAlias + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(c.GatewayKey))) + "\n" + identity + " " + public
 		jump := v.Alias + "-gateway"
 		v.SSHConfig = fmt.Sprintf("Host %s\n    HostName %s\n    Port %d\n    User %s\n    HostKeyAlias %s\n    StrictHostKeyChecking yes\n\n"+
 			"Host %s\n    HostName %s\n    Port %d\n    User %s\n    ProxyJump %s\n    HostKeyAlias %s\n    StrictHostKeyChecking yes\n",
-			jump, v.Host, v.Port, v.Alias, c.GatewayKeyAlias, v.Alias, v.Alias, remote.BackendPort, v.User, jump, v.Alias)
+			jump, v.Host, v.Port, identity, c.GatewayKeyAlias, v.Alias, identity, remote.BackendPort, v.User, jump, identity)
 	}
 	return v, nil
 }

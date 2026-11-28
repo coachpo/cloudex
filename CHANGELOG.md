@@ -4,6 +4,8 @@
 
 ## Workspace 工作流（未发布）
 
+- 新建 Workspace 时可使用随机名称或掷骰子换一个，SSH 别名优先使用可读的 Workspace 名称，Codex 设备码支持一键复制和打开验证页时复制。
+
 - Workspace 可绑定独立的 Sign in with Codex 或 Sign in with ChatGPT 授权。Codex 网关优先走 Responses WebSocket，并在生成未提交的条件下保留 HTTP/SSE 回退。[Codex 网关](docs/operations.md#codex-网关)
 - **Hosts → Add host** 支持 SSH 直连。管理员核对主机指纹后，可使用密码或私钥接入远端 Docker，直接在该 Host 放置和管理 Workspace。[加入远程 Host](docs/operations.md#加入远程-host)
 - 管理员可移除远程 Host 的登记，再用原名称重新登记。远端 Docker 资源继续保留。[移除远程 Host](docs/operations.md#移除远程-host)

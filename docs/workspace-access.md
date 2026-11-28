@@ -4,6 +4,8 @@
 
 使用 SSH 直连 Host 时，客户端仍按 Workspace 的配置连接共享 Gateway。Gateway 经远端宿主机的 SSH 连接转发到目标容器的专用 bridge 地址。添加 Host 时填写的宿主机登录凭据只供控制面使用。Workspace 用户的公钥依然在**设置 → SSH 公钥**管理。[Host 连接条件](operations.md#ssh-直连)
 
+SSH 配置的 Host 名以 `cloudex-` 开头，名称仅含 ASCII 字母、数字、点、下划线或连字符且首尾为字母或数字时使用小写名称，否则使用工作区 ID 的前 8 位，Gateway 登录名和工作区的 `HostKeyAlias` 仍为 `cloudex-<完整 ID>`。
+
 只有 `ready` 表示 Gateway 已核验当前容器的 sshd，并能提供两层主机公钥、指纹和 SSH 配置。客户端仍须自行验证网络与登录。SSH 客户端分别验证 Gateway 和容器的主机密钥。修改控制台的 SSH 主机名后，重新复制配置即可沿用原主机密钥别名。管理员在设置页统一替换公钥列表。Gateway 对新连接和新转发立即使用当前列表，容器内 sshd 读取下发的文件。离线 Host 重连后接收当前列表。撤销公钥不结束已建立的 SSH 会话。[状态与返回内容](../apps/api/internal/control/ssh.go) · [客户端连接步骤](operations.md#通过-ssh-连接-workspace)
 
 ## Web Terminal

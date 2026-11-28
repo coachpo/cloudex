@@ -17,7 +17,7 @@
 
 首次初始化成功即建立会话。修改账号须验证当前密码，留空新密码可保留原密码。成功后旧会话失效，调用者须接受响应中的新 Cookie。[账号操作](operations.md#管理员账号)
 
-SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤销全部公钥。Workspace 的 Access 接口提供连接信息及是否配置公钥。在线 Host 下发失败时，返回 `SSH_KEY_SYNC_FAILED`，已保存的公钥列表仍用于 Gateway 鉴权。
+SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤销全部公钥。Workspace 的 Access 接口提供连接信息及是否配置公钥，其中 `alias` 是 SSH 配置的 [Host 名](workspace-access.md#ssh-接入信息)。在线 Host 下发失败时，返回 `SSH_KEY_SYNC_FAILED`，已保存的公钥列表仍用于 Gateway 鉴权。
 
 SSH 主机名和 Agent 公开地址一起提交，空字符串清除对应设置。SSH 配置在主机名为空时使用绑定地址，新签发的注册材料使用当前 Agent 公开地址。默认工作镜像的修改立即适用于模板和新建的 Workspace。Host 可以报告多个镜像的放置就绪状态，实际 Docker 镜像清单另行查询。[默认工作镜像](operations.md#默认工作镜像)
 
