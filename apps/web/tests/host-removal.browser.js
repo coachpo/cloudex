@@ -34,7 +34,10 @@ async page => {
     const data = value => route.fulfill({ json: { data: value } });
     const problem = (status, code, message) => route.fulfill({ status, json: { error: { code, message } } });
     if (path === "/auth/session") return data({ username: "fixture" });
-    if (path === "/settings") return data({ workspace_image: image, ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" });
+    if (path === "/settings") return data({
+      workspace_image: image, ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "",
+      codex_config_toml: "", codex_agents_md: "",
+    });
     if (path === "/templates") return data([{ id: "codex", name: "Codex", image, cpu_milli: 1000, memory_mb: 512 }]);
     if (path === "/workspaces" || path === "/operations") return data([]);
     if (path === "/hosts") return data([...hosts.values()]);

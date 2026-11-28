@@ -52,6 +52,7 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 			r.Put("/auth/account", s.updateAccount)
 			r.Get("/settings", s.settings)
 			r.Put("/settings/access", s.setAccessSettings)
+			r.Put("/settings/codex", s.setCodexSettings)
 			r.Get("/settings/ssh-keys", s.sshKeys)
 			r.Put("/settings/ssh-keys", s.setSSHKeys)
 			r.Put("/settings/workspace-image", s.setWorkspaceImage)
@@ -205,24 +206,31 @@ func dockerFailure(w http.ResponseWriter, r *http.Request, e error) {
 	problem(w, r, 503, "RUNTIME_UNAVAILABLE", "Docker could not complete this request. Check the host or workspace state.")
 }
 func parse(w http.ResponseWriter, r *http.Request, target any, optional bool) bool {
-	return parseWithLimit(w, r, target, optional, 96*1024)
+	return parseWithLimit(w, r, target, optional, 96*1024, nil)
 }
-func parseWithLimit(w http.ResponseWriter, r *http.Request, target any, optional bool, limit int64) bool {
+func parseWithLimit(w http.ResponseWriter, r *http.Request, target any, optional bool, limit int64, tooLarge func()) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
-	if e := d.Decode(target); e != nil {
-		if optional && errors.Is(e, io.EOF) {
+	err := d.Decode(target)
+	message := "Expected a valid JSON request body."
+	switch {
+	case err == nil:
+		err = d.Decode(new(any))
+		if errors.Is(err, io.EOF) {
 			return true
 		}
-		bad(w, r, "Expected a valid JSON request body.")
-		return false
+		message = "Expected one JSON object."
+	case optional && errors.Is(err, io.EOF):
+		return true
 	}
-	if e := d.Decode(new(any)); !errors.Is(e, io.EOF) {
-		bad(w, r, "Expected one JSON object.")
-		return false
+	var sizeError *http.MaxBytesError
+	if tooLarge != nil && errors.As(err, &sizeError) {
+		tooLarge()
+	} else {
+		bad(w, r, message)
 	}
-	return true
+	return false
 }
 func send[T any](w http.ResponseWriter, r *http.Request, data T, e error) {
 	if e != nil {

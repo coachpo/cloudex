@@ -41,7 +41,10 @@ async page => {
     "/workspaces/fixture/git": { head: "head", status: "status\n".repeat(120), patch: "diff --git a/x b/x\n--- a/x\n+++ b/x\n" + "-old\n+new\n".repeat(60), truncated: false },
     "/workspaces/fixture/logs": { text: "line\n".repeat(120), truncated: false },
     "/operations": operations,
-    "/settings": { workspace_image: "workspace:saved", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" },
+    "/settings": {
+      workspace_image: "workspace:saved", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "",
+      codex_config_toml: "", codex_agents_md: "",
+    },
     "/settings/ssh-keys": { public_keys: [] },
     "/grants": { grants: [] },
     "/workspaces/fixture/grant-binding": { workspace_id: workspace.id, grant_id: "", binding_revision: 0, readiness: "unbound" },
@@ -82,6 +85,11 @@ async page => {
     }
     if (path === "/settings/ssh-keys" && request.method() === "PUT") {
       data[path] = request.postDataJSON();
+    }
+    if (path === "/settings/codex" && request.method() === "PUT") {
+      const files = request.postDataJSON();
+      data["/settings"] = { ...data["/settings"], codex_agents_md: files.agents_md, codex_config_toml: files.config_toml };
+      return route.fulfill({ json: { data: files } });
     }
     if (path === "/workspaces/fixture/access" && failAccess) {
       return route.fulfill({ status: 409, json: { error: { code: "WORKSPACE_BUSY", message: "Access refresh fixture failure" } } });
@@ -237,6 +245,31 @@ async page => {
     await keysSaved.waitFor();
     await keys.fill("ssh-ed25519 fixture Draft");
     check(await keysSaved.count() === 0, "An unsaved draft still displayed the public-key save confirmation");
+
+    const codex = page.getByRole("region", { name: "Codex settings", exact: true });
+    const agents = codex.getByLabel("AGENTS.md", { exact: true });
+    const config = codex.getByLabel("config.toml", { exact: true });
+    const settingsBeforeCodex = data["/settings"];
+    const agentsDraft = "# Saved in another tab\n";
+    const latestAgents = "# Latest server version\n";
+    const configDraft = "# Local draft\nmodel = \"fixture\"\n";
+    await agents.fill(agentsDraft);
+    await config.fill(configDraft);
+
+    data["/settings"] = { ...settingsBeforeCodex, codex_agents_md: agentsDraft, ssh_host: "converged.example.test" };
+    await page.locator('#settings-ssh-host[value="converged.example.test"]').waitFor();
+    check(await config.inputValue() === configDraft, "Matching a saved Codex file discarded the other file's draft");
+
+    data["/settings"] = { ...settingsBeforeCodex, codex_agents_md: latestAgents, ssh_host: "latest.example.test" };
+    await page.locator('#settings-ssh-host[value="latest.example.test"]').waitFor();
+    check(await agents.inputValue() === latestAgents, "A saved Codex draft hid a newer server value");
+    const codexWrite = page.waitForRequest(req => req.url() === base + "/settings/codex" && req.method() === "PUT");
+    await codex.getByRole("button", { name: "Save Codex settings" }).click();
+    const codexFiles = (await codexWrite).postDataJSON();
+    check(codexFiles.agents_md === latestAgents && codexFiles.config_toml === configDraft,
+      "Saving one Codex file overwrote the newer saved value of the other file");
+    await codex.getByRole("status").filter({ hasText: "Codex settings saved." }).waitFor();
+    data["/settings"] = settingsBeforeCodex;
 
     await page.setViewportSize({ width: 320, height: 720 });
     await page.goto(origin + "/workspaces/new");

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Launch Codex with this Workspace's gateway and a grant-specific home."""
 
+from fcntl import LOCK_EX, flock
 import hashlib
 from http.client import HTTPException
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import secrets
 import sys
 import tempfile
+import tomllib
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -16,6 +18,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 CODEX = "/usr/local/libexec/cloudex-codex"
 CREDENTIAL = Path("/run/cloudex/gateway.json")
 CATALOG_LIMIT = 16 * 1024 * 1024
+# Two 32 KiB files encoded as JSON, where an ASCII byte can take six bytes.
+SETTINGS_LIMIT = 6 * 2 * 32 * 1024 + 1024
 
 GATEWAY_ERRORS = {
     "instance_not_verified": "The Workspace container is waiting for gateway credential verification.",
@@ -44,11 +48,11 @@ def load_credential():
         raise GatewayUnavailable("This Workspace has no active Cloudex gateway credential. Check its authorization binding.")
 
 
-def load_catalog(base, token):
-    request = Request(base + "/models", headers={"Authorization": "Bearer " + token})
+def gateway_get(base, token, path, label, limit):
+    request = Request(base + path, headers={"Authorization": "Bearer " + token})
     try:
         with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=15) as response:
-            catalog = response.read(CATALOG_LIMIT + 1)
+            body = response.read(limit + 1)
     except HTTPError as error:
         try:
             code = json.loads(error.read(4096))["error"]["code"]
@@ -60,23 +64,41 @@ def load_catalog(base, token):
             raise GatewayUnavailable(GATEWAY_ERRORS[code])
         if error.code == 401:
             raise GatewayUnavailable("The Workspace gateway credential is inactive. Check its authorization binding.")
-        raise GatewayUnavailable(f"The Cloudex model catalog request failed (HTTP {error.code}).")
+        raise GatewayUnavailable(f"The Cloudex {label} request failed (HTTP {error.code}).")
     except (OSError, HTTPException):
-        raise GatewayUnavailable("Unable to reach the Cloudex model catalog. Check gateway DNS and TLS.")
+        raise GatewayUnavailable(f"Unable to reach the Cloudex {label}. Check gateway DNS and TLS.")
+    if len(body) > limit:
+        raise GatewayUnavailable(f"The Cloudex {label} is invalid.")
+    return body
+
+
+def load_catalog(base, token):
+    catalog = gateway_get(base, token, "/models", "model catalog", CATALOG_LIMIT)
     try:
-        if len(catalog) > CATALOG_LIMIT:
-            raise ValueError()
         models = json.loads(catalog)["models"]
         if not isinstance(models, list):
             raise ValueError()
         if not models:
             raise GatewayUnavailable("The bound authorization has no compatible models.")
-        model = models[0]["slug"]
-        if not isinstance(model, str) or not model:
+        slugs = [model["slug"] for model in models]
+        if any(not isinstance(slug, str) or not slug for slug in slugs):
             raise ValueError()
     except (ValueError, KeyError, TypeError):
         raise GatewayUnavailable("The Cloudex model catalog is invalid.")
-    return catalog, model
+    return catalog, slugs
+
+
+def load_settings(base, token):
+    body = gateway_get(base, token, "/codex-settings", "Codex startup settings", SETTINGS_LIMIT)
+    try:
+        settings = json.loads(body)
+        config_toml, agents_md = settings["config_toml"], settings["agents_md"]
+        if not isinstance(config_toml, str) or not isinstance(agents_md, str):
+            raise ValueError()
+        config = tomllib.loads(config_toml)
+    except (ValueError, KeyError, TypeError):
+        raise GatewayUnavailable("The Cloudex Codex startup settings are invalid.")
+    return config_toml, agents_md, config
 
 
 def atomic_write(target, data):
@@ -90,13 +112,33 @@ def atomic_write(target, data):
             path.unlink(missing_ok=True)
 
 
+def apply_startup_settings(home, base, token):
+    home.mkdir(parents=True, exist_ok=True)
+    # Launches in the same grant share these files. Fetch inside the lock so
+    # a delayed launch cannot install an older pair after a newer one.
+    with (home / ".startup-settings.lock").open("a") as lock:
+        flock(lock, LOCK_EX)
+        config_toml, agents_md, config = load_settings(base, token) if token is not None else ("", "", {})
+        atomic_write(home / "config.toml", config_toml.encode())
+        agents = home / "AGENTS.md"
+        if agents_md:
+            atomic_write(agents, agents_md.encode())
+        else:
+            agents.unlink(missing_ok=True)
+    return config
+
+
 def configure(args):
+    os.umask(0o077)
+    root = Path.home().resolve() / ".codex" / "cloudex"
     try:
         credential = load_credential()
         base = credential["origin"].rstrip("/") + "/g/v1"
         token = credential["token"]
-        catalog, model = load_catalog(base, token)
+        catalog, slugs = load_catalog(base, token)
         namespace = f"{credential['grant_id']}-g{credential['grant_epoch']:d}"
+        home = root / namespace
+        config = apply_startup_settings(home, base, token)
         note = "Check the Workspace's Cloudex authorization binding."
     except GatewayUnavailable as error:
         if not args or args[0] != "app-server":
@@ -104,44 +146,51 @@ def configure(args):
         # Desktop can initialize a protocol connection while the Workspace is
         # unbound. The custom provider requires a credential before any request.
         print(error, file=sys.stderr)
-        base, token, catalog, model, namespace = "https://127.0.0.1:1/g/v1", None, None, None, "unavailable"
+        base, token = "https://127.0.0.1:1/g/v1", None
+        home = root / "unavailable"
+        config = apply_startup_settings(home, base, token)
         note = str(error)
 
-    os.umask(0o077)
-    home = Path.home().resolve() / ".codex" / "cloudex" / namespace
-    home.mkdir(parents=True, exist_ok=True)
-    quote = lambda value: json.dumps(value, ensure_ascii=False)
-    configuration = f'''model_provider = "cloudex"
-cli_auth_credentials_store = "file"
+    def quote(value):
+        # JSON leaves DEL unescaped, but TOML requires an escape for it.
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
-[shell_environment_policy]
-exclude = ["CLOUDEX_GATEWAY_TOKEN"]
-
-[model_providers.cloudex]
-name = "Cloudex"
-base_url = {quote(base)}
-wire_api = "responses"
-env_key = "CLOUDEX_GATEWAY_TOKEN"
-env_key_instructions = {quote(note)}
-requires_openai_auth = false
-supports_websockets = true
-request_max_retries = 0
-stream_max_retries = 0
-
-[model_providers.cloudex.env_http_headers]
-x-cloudex-run-id = "CLOUDEX_GATEWAY_RUN_ID"
-'''
-    atomic_write(home / "config.toml", configuration.encode())
+    provider = (
+        '{name="Cloudex",'
+        f'base_url={quote(base)},'
+        'wire_api="responses",env_key="CLOUDEX_GATEWAY_TOKEN",'
+        f'env_key_instructions={quote(note)},'
+        'requires_openai_auth=false,supports_websockets=true,'
+        'request_max_retries=0,stream_max_retries=0,'
+        'env_http_headers={x-cloudex-run-id="CLOUDEX_GATEWAY_RUN_ID"}}'
+    )
+    policy = config.get("shell_environment_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    if isinstance(policy.get("filters"), dict):
+        # Codex replaces the filters table when an override selects legacy exclude.
+        token_exclusion = 'shell_environment_policy.filters.CLOUDEX_GATEWAY_TOKEN="exclude"'
+    else:
+        exclude = policy.get("exclude")
+        patterns = [pattern for pattern in exclude if isinstance(pattern, str)] if isinstance(exclude, list) else []
+        exclusions = list(dict.fromkeys([*patterns, "CLOUDEX_GATEWAY_TOKEN"]))
+        token_exclusion = "shell_environment_policy.exclude=" + quote(exclusions)
+    overrides = [
+        "-c", 'model_provider="cloudex"',
+        "-c", 'cli_auth_credentials_store="file"',
+        "-c", "model_providers.cloudex=" + provider,
+        "-c", token_exclusion,
+    ]
     env = os.environ.copy()
     for name in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_SQLITE_HOME", "CLOUDEX_GATEWAY_TOKEN"):
         env.pop(name, None)
     env["CODEX_HOME"] = str(home)
     env["CLOUDEX_GATEWAY_RUN_ID"] = secrets.token_hex(16)
-    overrides = []
     if token is not None:
         path = home / ("models-" + hashlib.sha256(catalog).hexdigest() + ".json")
         atomic_write(path, catalog)
-        overrides = ["-c", "model_catalog_json=" + quote(str(path)), "-c", "model=" + quote(model)]
+        preferred = config.get("model")
+        model = preferred if preferred in slugs else slugs[0]
+        overrides.extend(["-c", "model_catalog_json=" + quote(str(path)), "-c", "model=" + quote(model)])
         env["CLOUDEX_GATEWAY_TOKEN"] = token
     os.execve(CODEX, [CODEX, *overrides, *args], env)
 

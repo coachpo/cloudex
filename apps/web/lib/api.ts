@@ -109,12 +109,14 @@ export type Git = { head: string; status: string; patch: string; truncated: bool
 export type Settings = {
   workspace_image: string;
   ssh_host: string; ssh_bind: string; agent_public_address: string;
+  codex_config_toml: string; codex_agents_md: string;
 };
 
 export async function readSettings(signal?: AbortSignal) {
   const settings = await api<Settings>("/settings", { signal });
   if (typeof settings?.workspace_image !== "string" || typeof settings.ssh_host !== "string" ||
-    typeof settings.ssh_bind !== "string" || typeof settings.agent_public_address !== "string") {
+    typeof settings.ssh_bind !== "string" || typeof settings.agent_public_address !== "string" ||
+    typeof settings.codex_config_toml !== "string" || typeof settings.codex_agents_md !== "string") {
     throw new APIError(200, noResponseMessage);
   }
   return settings;

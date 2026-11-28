@@ -148,6 +148,57 @@ func transportAdapter(t *testing.T, channel, base string, client *http.Client) *
 	return adapter
 }
 
+func TestGatewayCodexSettingsRequiresActiveCredentialAndReadsCurrentPair(t *testing.T) {
+	// Settings must be available for an admitted credential without consulting an upstream adapter.
+	f := newTransportFixture(t)
+	adapter := transportAdapter(t, codexupstream.ChannelCodex, "https://fixture.invalid", nil)
+	_, token := f.workspace("codex-settings", f.grant(adapter))
+	get := func(bearer string, status int) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, f.server.URL+GatewayPath+"/codex-settings", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		res, err := f.server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = res.Body.Close() })
+		if res.StatusCode != status || res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("status=%d headers=%v; want %d with uncached JSON", res.StatusCode, res.Header, status)
+		}
+		return res
+	}
+	for _, bearer := range []string{"", "invalid-fixture"} {
+		res := get(bearer, http.StatusUnauthorized)
+		var result struct{ Error struct{ Code string } }
+		if err := json.NewDecoder(res.Body).Decode(&result); err != nil || result.Error.Code != "invalid_gateway_credential" {
+			t.Fatalf("credential error = %+v (%v)", result.Error, err)
+		}
+	}
+	assertFiles := func(want store.CodexSettings) {
+		t.Helper()
+		res := get(token, http.StatusOK)
+		var got store.CodexSettings
+		if err := json.NewDecoder(res.Body).Decode(&got); err != nil || got != want {
+			t.Fatalf("gateway settings = %+v (%v); want %+v", got, err, want)
+		}
+	}
+	assertFiles(store.CodexSettings{})
+	for _, settings := range []store.CodexSettings{
+		{ConfigTOML: "model_context_window = 120000\n", AgentsMD: "# Fixture instructions\n"},
+		{ConfigTOML: "model_context_window = 240000\n"},
+	} {
+		if err := f.db.SetCodexSettings(t.Context(), settings); err != nil {
+			t.Fatal(err)
+		}
+		assertFiles(settings)
+	}
+}
+
 const transportModel = "gpt-6.2-sol"
 
 func transportCatalog(t *testing.T, channel string, handler http.HandlerFunc) *httptest.Server {

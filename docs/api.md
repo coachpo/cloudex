@@ -9,7 +9,7 @@
 | 调用方需要处理的业务 | 请求与响应的权威入口 |
 |---|---|
 | 初始化、登录、会话和修改账号 | [账号和 Cookie](../apps/api/internal/httpapi/auth.go) |
-| 默认镜像和接入地址 | [控制面设置](../apps/api/internal/httpapi/settings.go) |
+| 默认镜像、接入地址和 Codex 启动配置 | [控制面设置](../apps/api/internal/httpapi/settings.go) · [Codex 启动配置](#codex-启动配置) |
 | Host 登记、删除、凭据更新、调度状态、盘点、容量和并发 | [Host 接口](../apps/api/internal/httpapi/hosts.go)、[删除 Host](#删除-host)、[SSH 直连接口](../apps/api/internal/httpapi/ssh_hosts.go)与[Host 状态](../apps/api/internal/store/hosts.go) |
 | Codex 授权、Workspace 绑定和实例凭据 | [管理 API 源码](../apps/api/internal/httpapi/grants.go) · [授权和绑定](#codex-授权和绑定) · [推理请求](#workspace-推理网关) |
 | Workspace 创建、放置、操作回执、历史、日志、指标与 Git | [Workspace 接口](../apps/api/internal/httpapi/workspaces.go)与[生命周期契约](workspace-lifecycle.md) |
@@ -22,6 +22,12 @@ SSH 公钥设置接受 `public_keys` 数组，替换全局列表。空数组撤�
 SSH 主机名和 Agent 公开地址一起提交，空字符串清除对应设置。SSH 配置在主机名为空时使用绑定地址，新签发的注册材料使用当前 Agent 公开地址。默认工作镜像的修改立即适用于模板和新建的 Workspace。Host 可以报告多个镜像的放置就绪状态，实际 Docker 镜像清单另行查询。[默认工作镜像](operations.md#默认工作镜像)
 
 Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。容量变更保留已有预留，并发调整保留在途操作。新的派发受管理员设定值和最近一次生效值中较小者约束。[磁盘预留](operations.md#主机磁盘预留容量) · [操作并发](operations.md#主机操作并发上限)
+
+## Codex 启动配置
+
+`GET /api/v1/settings` 在设置响应中返回 `codex_config_toml` 和 `codex_agents_md`，两者都是字符串。`PUT /api/v1/settings/codex` 接受 `{"config_toml":"…","agents_md":"…"}`，两项必填，整体替换并在成功响应中回显该对象。空字符串清除对应文件的配置。
+
+每项最多 32 KiB，且不得含 NUL。`config_toml` 须符合启动器支持的 TOML 1.0，日期年份从 `0001` 起。顶层保留键为 `model_provider`、`model_providers`、`model_catalog_json`、`cli_auth_credentials_store`、`openai_base_url` 和 `chatgpt_base_url`。字段校验失败返回 `400 INVALID_CODEX_SETTINGS`，消息指出出错文件、字段或保留键。[网关下发](#workspace-推理网关)
 
 ## 删除 Host
 
@@ -86,6 +92,7 @@ Cordon 或禁用的 Host 也可调整磁盘预留容量和操作并发上限。�
 | 方法与路径 | 外部契约 |
 |---|---|
 | `GET /g/v1/models` | 使用实例 Bearer 返回当前授权下适用于固定版 Codex 的目录。 |
+| `GET /g/v1/codex-settings` | 使用同一实例 Bearer 返回当前全局启动配置，响应为 `application/json`，对象含 `config_toml` 和 `agents_md`，响应头为 `Cache-Control: no-store`。文件未配置时对应值为空字符串。此请求只读取控制面设置。 |
 | `GET /g/v1/responses` | 使用同一 Bearer 请求 WebSocket Upgrade。成功建立上游连接且仍符合准入条件后才能收到 `101`。上游在提交生成前明确拒绝 Upgrade 时返回 `426`。 |
 | `POST /g/v1/responses` | 使用同一 Bearer 提交 HTTP Responses，正常响应以 SSE 流交付。需要继续工具调用时，客户端按适用协议回传结果和历史。 |
 

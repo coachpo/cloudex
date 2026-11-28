@@ -31,11 +31,15 @@ test("management responses preserve objects, arrays, and explicit empty acknowle
 });
 
 test("the settings query rejects malformed records and can recover on the next read", async (t) => {
-  const valid = { workspace_image: "workspace:fixture", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" };
+  const valid = {
+    workspace_image: "workspace:fixture", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "",
+    codex_config_toml: 'model = "fixture"\n', codex_agents_md: "# Fixture\n",
+  };
   let data;
   const { signal } = new AbortController();
   t.mock.method(globalThis, "fetch", async () => Response.json({ data }));
-  for (data of [[], {}, { ...valid, workspace_image: 12 }, { ...valid, ssh_host: null }]) {
+  for (data of [[], {}, { ...valid, workspace_image: 12 }, { ...valid, ssh_host: null },
+    { ...valid, codex_config_toml: null }, { ...valid, codex_agents_md: undefined }]) {
     await assert.rejects(settingsQuery.queryFn({ signal }), { message: noResponseMessage, status: 200 });
     await assert.rejects(readSettings(), { message: noResponseMessage, status: 200 });
   }

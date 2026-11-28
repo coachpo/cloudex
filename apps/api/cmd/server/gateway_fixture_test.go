@@ -74,6 +74,7 @@ type fixtureFault struct {
 	dropStream         bool
 	dropTerminal       bool
 	beforeExchange     func(context.Context)
+	onFirstGeneration  func(fixtureResponseRequest)
 }
 
 type gatewayFixture struct {
@@ -351,10 +352,11 @@ type fixtureResponseRequest struct {
 }
 
 type fixtureInput struct {
-	Type   string
-	CallID string `json:"call_id"`
-	Output json.RawMessage
-	Tools  json.RawMessage
+	Type    string
+	CallID  string `json:"call_id"`
+	Content json.RawMessage
+	Output  json.RawMessage
+	Tools   json.RawMessage
 }
 
 func (f *gatewayFixture) responses(w http.ResponseWriter, r *http.Request) {
@@ -478,6 +480,9 @@ func (f *gatewayFixture) respond(w http.ResponseWriter, r *http.Request, body fi
 		Model: body.Model, Previous: body.PreviousResponseID,
 	})
 	f.mu.Unlock()
+	if round == 0 && f.fault.onFirstGeneration != nil {
+		f.fault.onFirstGeneration(body)
+	}
 	if round > 2 {
 		f.t.Error("fixture observed a duplicate generation")
 		return false

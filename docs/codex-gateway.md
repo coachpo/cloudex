@@ -17,6 +17,12 @@ Cloudex 由同一个 Go 控制面持有上游授权，并向工作容器提供 R
 
 启动器从当前授权的目录生成 Codex `0.172.0` 的模型快照。可见 slug 和客户端可编码能力共同决定可用模型。ChatGPT 的预览针对 function/custom 工具使用 namespace 或 `additional_tools`。若一个模型和客户端组合会产生不受支持的工具请求，返回模型或字段错误。每次提交继续按当前授权和能力检查。[ChatGPT 预览限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 
+## 启动配置
+
+每次启动时，启动器先用实例凭据读取当前授权的模型目录，再从 `GET /g/v1/codex-settings` 获取控制台保存的两份全局文件。启动器在当前授权代次的 `CODEX_HOME` 原样写入 `config.toml` 与非空的 `AGENTS.md`。清除配置后，启动器写入空的 `config.toml` 并删除原有的 `AGENTS.md`。网关只读取控制面保存的文件。
+
+启动器通过 `-c` 设置 Cloudex provider、凭据存储、目录快照和默认模型。管理员在 `config.toml` 指定的 `model` 如在当前目录中，就作为默认模型，否则取目录第一项。启动器保留管理员的环境过滤规则，并在 `shell_environment_policy.exclude` 或 `shell_environment_policy.filters` 中排除 `CLOUDEX_GATEWAY_TOKEN`。未绑定 Workspace 的 App Server 可在无管理员配置、无实例凭据的情况下建立协议连接。[设置接口](api.md#codex-启动配置) · [运维](operations.md#配置-codex-启动文件) · [ADR 0008](adr/0008-codex-startup-settings.md)
+
 ## 授权身份和刷新
 
 授权创建后，渠道与身份固定。重授权确认同一注册、同一 subject，以及适用的上游用户和 workspace 后替换整份授权。选择了其他身份时，本次结果作废。成功替换递增授权代次 `grant_epoch`，已有绑定保留，旧会话上下文失去续写资格。
@@ -42,6 +48,8 @@ Codex 启动器按授权 ID 和授权代次选择容器内的会话空间。同�
 生成尚未提交时，上游明确拒绝 Upgrade、返回无效升级响应，或 ChatGPT 握手返回 `403 subscription_sharing_route_not_supported`，网关会用 `426` 让固定版客户端以同一授权和同一模型回退 HTTP/SSE。其他权限失败和限流保留上游语义。已写出生成，或因断线、进程退出而无法确定是否写出时，网关记录该次提交，防止客户端自动改用另一传输重复发出请求。客户端明确引用上一轮交付的响应或工具调用才能推进相关续写。
 
 上游成功响应缺少 `Content-Type` 时，网关先在有限字节和时限内确认首个 Responses SSE 事件，支持 LF、CRLF、CR 换行和流首的 UTF-8 BOM，再以 `text/event-stream` 向客户端转发事件。仅用 SSE 事件名标识的 Responses 事件会补齐客户端所需的 JSON `type`。无法确认流格式时保留提交结果未知的状态。HTTP 和流内错误保留上游错误种类、适用字段和重试信息。只有 `response.completed` 表示完成。流内失败、未完成、中断或提前断流分别保留实际状态，缺少上游 usage 时将用量视为未知。[固定版 Codex 回退逻辑](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core/src/responses_retry.rs) · [上游错误与恢复](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
+
+已知限制。Codex `0.172.0` 通过 ChatGPT HTTP/SSE 在同一轮工具往返中触发自动压缩时，压缩可经 `POST /g/v1/responses` 完成，紧随其后的同轮续写会收到 `409 submission_outcome_unknown`。此场景在受控假上游观测到。[受控验收](codex-gateway-e2e.md#固定客户端与受控上游)
 
 ## 上游公开支持边界
 

@@ -269,6 +269,88 @@ function SSHKeySettings() {
   </section>;
 }
 
+type CodexFiles = Pick<Settings, "codex_agents_md" | "codex_config_toml">;
+
+function CodexSettings({ settings, observedAt, unavailable }: SettingsObservation & { settings: Settings }) {
+  const { t } = useT();
+  const client = useQueryClient();
+  const [draft, setDraft] = useState<Partial<CodexFiles>>({});
+  const fields = [
+    { key: "codex_agents_md", name: "agents_md", label: "AGENTS.md" },
+    { key: "codex_config_toml", name: "config_toml", label: "config.toml" },
+  ] as const;
+  const files = { ...settings, ...draft };
+  const write = useMutation({
+    mutationFn: async (edits: Partial<CodexFiles>) => {
+      // Keep a file edited in another tab when this form has no draft for it.
+      const current = edits.codex_agents_md === undefined || edits.codex_config_toml === undefined
+        ? await readSettings() : settings;
+      const submitted = {
+        agents_md: edits.codex_agents_md ?? current.codex_agents_md,
+        config_toml: edits.codex_config_toml ?? current.codex_config_toml,
+      };
+      const acknowledged = await saveSetting(client, settingsKey, () => change("/settings/codex", "PUT", submitted));
+      return { acknowledged, submitted };
+    },
+    onSuccess: ({ acknowledged }) => { if (acknowledged) setDraft({}); },
+  });
+  const { reset } = write;
+  const submitted = write.data?.submitted;
+  const confirmed = !unavailable && observedAt >= write.submittedAt &&
+    submitted?.agents_md === settings.codex_agents_md && submitted.config_toml === settings.codex_config_toml;
+  const unconfirmed = write.data?.acknowledged === false;
+  useEffect(() => {
+    setDraft(current => {
+      const agentsSaved = current.codex_agents_md === settings.codex_agents_md;
+      const configSaved = current.codex_config_toml === settings.codex_config_toml;
+      if (!agentsSaved && !configSaved) return current;
+      const next = { ...current };
+      if (agentsSaved) delete next.codex_agents_md;
+      if (configSaved) delete next.codex_config_toml;
+      return next;
+    });
+  }, [settings.codex_agents_md, settings.codex_config_toml]);
+  useEffect(() => {
+    if (unconfirmed && confirmed) {
+      setDraft({});
+      reset();
+    }
+  }, [unconfirmed, confirmed, reset]);
+  const canSave = !unavailable && !write.isPending && fields.some(({ key }) => files[key] !== settings[key]);
+
+  return <section className="panel" id="codex" aria-labelledby="codex-heading">
+    <div className="section-head"><div>
+      <h2 id="codex-heading">{t("codexSettings")}</h2>
+      <p id="codex-settings-hint">{t("codexSettingsHint")}</p>
+    </div></div>
+    <form className="form" method="post" aria-labelledby="codex-heading" aria-describedby="codex-settings-hint"
+      onSubmit={e => { e.preventDefault(); if (canSave) write.mutate(draft); }}>
+      <FieldGroup className="halves">
+        {fields.map(({ key, name, label }) => <Field key={key} data-disabled={write.isPending}>
+          <FieldLabel htmlFor={key}>{label}</FieldLabel>
+          <textarea id={key} name={name} className="field font-mono" rows={8} autoCapitalize="none" autoCorrect="off"
+            spellCheck={false} disabled={write.isPending} value={files[key]} onChange={e => {
+              const value = e.target.value;
+              setDraft(previous => {
+                const next = { ...previous };
+                if (value === settings[key]) delete next[key];
+                else next[key] = value;
+                return next;
+              });
+              reset();
+            }}/>
+        </Field>)}
+      </FieldGroup>
+      {write.error && <Notice error={write.error}/>}
+      {unconfirmed && !confirmed && <p className="notice" role="alert">{t("settingSaveUnconfirmed")}</p>}
+      {write.data?.acknowledged && confirmed && <p className="confirm" role="status">{t("codexSettingsSaved")}</p>}
+      <div className="actions">
+        <Button type="submit" disabled={!canSave}>{write.isPending ? t("saving") : t("saveCodexSettings")}</Button>
+      </div>
+    </form>
+  </section>;
+}
+
 function SettingsIndex({ container }: { container: RefObject<HTMLDivElement | null> }) {
   const { t } = useT();
   const [sections, setSections] = useState<{ id: string; label: string }[]>([]);
@@ -309,6 +391,7 @@ export default function SettingsPage() {
         </section>}
         <SSHKeySettings/>
         <GrantSettings/>
+        {q.data && <CodexSettings settings={q.data} observedAt={q.dataUpdatedAt} unavailable={q.isError}/>}
         {q.data && <AccessSettings settings={q.data} observedAt={q.dataUpdatedAt} unavailable={q.isError}/>}
       </div>
     </div>

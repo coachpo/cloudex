@@ -397,6 +397,7 @@ textarea.field { min-height: 112px; resize: vertical; line-height: 1.55; }
 .settings-index a:hover { color: var(--ink); background: var(--hover); }
 .settings-sections { display: grid; gap: 24px; min-width: 0; }
 .settings-sections > * { scroll-margin-top: calc(var(--header) + 16px); }
+#codex textarea { font-family: var(--font-mono); }
 
 /* Inference authorizations */
 .grant-list { display: grid; gap: 12px; }

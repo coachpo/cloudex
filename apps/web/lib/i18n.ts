@@ -318,6 +318,10 @@ const en = {
   saveAccount: "Save account",
   settingsIntro: "Account, workspace defaults, and access settings.",
   workspaceDefaults: "Workspace defaults",
+  codexSettings: "Codex settings",
+  codexSettingsHint: "Applies to newly started Codex sessions. Reconnect Codex Desktop to apply.",
+  saveCodexSettings: "Save Codex settings",
+  codexSettingsSaved: "Codex settings saved.",
   grantList: "Codex authorizations",
   grantListEmpty: "No saved authorizations.",
   grantSignInChatGPT: "Sign in with ChatGPT",
@@ -534,6 +538,13 @@ const en = {
   capacityResourceError: "The selected host does not have enough {resource} capacity.",
   "validation.json": "Expected a valid JSON request body.",
   "validation.jsonObject": "Expected one JSON object.",
+  "validation.codexConfigString": "config_toml must be a string.",
+  "validation.codexAgentsString": "agents_md must be a string.",
+  "validation.codexRequestSize": "config.toml and AGENTS.md must each be at most 32 KiB.",
+  "validation.codexConfigSizeAndNUL": "config.toml must be at most 32 KiB and contain no NUL characters.",
+  "validation.codexAgentsSizeAndNUL": "AGENTS.md must be at most 32 KiB and contain no NUL characters.",
+  "validation.codexConfigTOML": "config.toml must be valid TOML.",
+  "validation.codexReservedKey": "config.toml cannot set the reserved key {key}.",
   "validation.sendKeys": "Send public_keys as an array.",
   "validation.keyTooLong": "Idempotency-Key is too long.",
   "validation.selectHost": "Select a Host for manual placement.",
@@ -900,6 +911,10 @@ const zhCN = {
   saveAccount: "保存账号",
   settingsIntro: "账号、工作区默认值与接入设置。",
   workspaceDefaults: "工作区默认设置",
+  codexSettings: "Codex 配置",
+  codexSettingsHint: "新启动的 Codex 会话生效，Codex Desktop 需重新连接。",
+  saveCodexSettings: "保存 Codex 配置",
+  codexSettingsSaved: "Codex 配置已保存。",
   grantList: "Codex 授权",
   grantListEmpty: "暂无已保存的授权。",
   grantSignInChatGPT: "使用 ChatGPT 登录",
@@ -1116,6 +1131,13 @@ const zhCN = {
   capacityResourceError: "所选主机的{resource}容量不足。",
   "validation.json": "请求正文须为有效的 JSON。",
   "validation.jsonObject": "请发送一个 JSON 对象。",
+  "validation.codexConfigString": "config_toml 须为字符串。",
+  "validation.codexAgentsString": "agents_md 须为字符串。",
+  "validation.codexRequestSize": "config.toml 和 AGENTS.md 各自最多 32 KiB。",
+  "validation.codexConfigSizeAndNUL": "config.toml 最多 32 KiB，且不能包含 NUL 字符。",
+  "validation.codexAgentsSizeAndNUL": "AGENTS.md 最多 32 KiB，且不能包含 NUL 字符。",
+  "validation.codexConfigTOML": "config.toml 须为有效的 TOML。",
+  "validation.codexReservedKey": "config.toml 不能设置保留键 {key}。",
   "validation.sendKeys": "请以数组格式提交公钥。",
   "validation.keyTooLong": "幂等键过长。",
   "validation.selectHost": "请为手动放置选择主机。",
@@ -1246,7 +1268,11 @@ export function localizeProblem(locale: Locale, code: string | undefined, origin
   if (code && Object.hasOwn(grantProblems, code)) return message(locale, grantProblems[code]);
   if (locale === "en") return original;
   if (code === "SSH_CONNECTION_FAILED") return localizeSSHMessage(locale, original);
-  if (code === "INVALID_REQUEST") {
+  if (code === "INVALID_REQUEST" || code === "INVALID_CODEX_SETTINGS") {
+    if (code === "INVALID_CODEX_SETTINGS") {
+      const reserved = /^config\.toml cannot set the reserved key ([a-z_]+)\.$/.exec(original);
+      if (reserved) return message(locale, "validation.codexReservedKey", { key: reserved[1] });
+    }
     const key = knownOriginals.get(original);
     return key?.startsWith("validation.") ? message(locale, key) : original;
   }

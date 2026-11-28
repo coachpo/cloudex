@@ -30,6 +30,10 @@ CLOUDEX_TEST_CODEX_BIN=/absolute/path/to/codex go test -count=1 -v ./cmd/server 
 | W1 换绑 B，W2 保持 A，两个方向都测 | 在拨号前、上游 `101` 后但下游 `101` 前、生成/工具写入边界、SSE 在途分别暂停。提交后 A 不收到 W1 新获准的写入，B 不收到 A 的旧会话，W2 继续 A。提交前已交给网络的数据单独核对。 |
 | 限流和上游不可用 | 记录原渠道、请求实际次数、状态码、错误码和重试信息。另一个授权请求仍使用它自己的身份。 |
 
+### Codex 启动配置
+
+本机场景 `native/chatgpt-startup-settings` 需要 PATH 上的 Python 3.11 或更新版本。通过管理员 API 保存含 MCP 服务器的 `config.toml` 和全局 `AGENTS.md`，用仓库的启动器运行固定版 Codex。两份文件须按原文落盘，ChatGPT 假上游的首个生成请求须含全局指令及编码为 `additional_tools` 的 MCP 工具。清空设置后再次启动须写入空配置，并移除原指令文件。
+
 ### 换回原授权的受控回归
 
 从 `apps/api` 运行以下测试，分别验证 WebSocket 和 SSE。切到 B 时网关拒绝 A 的历史引用。切回 A 后，客户端用新凭据提交带原工具调用及结果的续聊请求。受控上游应恰好收到一次该请求，客户端应收到 `response.completed`。使用首次绑定 A 时的凭据应收到 `401`。[换绑回归源码](../apps/api/internal/codexgateway/transport_test.go)
@@ -88,6 +92,7 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 | 场景 | 层与环境 | 最近通过的提交 | 结果与证据 |
 | --- | --- | --- | --- |
 | [固定客户端与受控上游](#固定客户端与受控上游)、[镜像与分机验证](#镜像与分机验证)的受控矩阵 | 本机固定二进制与隔离 Colima Docker，`codex-cli 0.172.0`，合成授权与假上游 | 无，原记录未写受验提交 | 原生矩阵 9 项和 Docker 矩阵 10 项均通过，明细见[受控执行记录](#受控执行记录)。 |
+| [Codex 启动配置](#codex-启动配置) | 本机 `codex-cli 0.172.0`、Python 3.14.6、合成授权与 ChatGPT WS 假上游 | 无 | 基于 `c6457666143b04b35254367bb6bf512ce4de29b8` 的未提交工作区通过原生矩阵 12 项。首个生成请求含 `CLOUDEX_GLOBAL_AGENTS` 与 `additional_tools` 中的 `fixture_ping`。写入和清除后的文件符合预期。Docker 本轮未运行。 |
 | [真实账号验收](#真实账号验收)：两渠道 WS 与 SSE 的工具往返及撤权 | 独立 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | 无，原记录的提交不可达且没有等价提交 | 通过，明细见[真实账号执行记录](#真实账号执行记录)。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。 |
 | [换回原授权的镜像复验](#换回原授权的镜像复验) | 隔离的本地 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | `375a5720a57556ac3fb4401d19bf768ec8ce5277` | 通过，WebSocket 与 SSE 两轮 A → B → A，明细见[真实账号执行记录](#真实账号执行记录)。 |
 

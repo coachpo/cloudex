@@ -4,6 +4,7 @@
 
 ## Workspace 工作流（未发布）
 
+- 管理员可在设置页统一编辑 Codex 的 `config.toml` 和 `AGENTS.md`。绑定授权的 Workspace 在下一次启动 Codex 时读取保存的版本，Desktop 重新连接后生效。[Codex 启动配置](docs/operations.md#配置-codex-启动文件)
 - 新建 Workspace 时可使用随机名称或掷骰子换一个，SSH 别名优先使用可读的 Workspace 名称，Codex 设备码支持一键复制和打开验证页时复制。
 
 - Workspace 可绑定独立的 Sign in with Codex 或 Sign in with ChatGPT 授权。Codex 网关优先走 Responses WebSocket，并在生成未提交的条件下保留 HTTP/SSE 回退。[Codex 网关](docs/operations.md#codex-网关)

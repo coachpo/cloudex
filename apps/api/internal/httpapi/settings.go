@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/netip"
@@ -8,11 +10,19 @@ import (
 	"strings"
 
 	"github.com/coachpo/cloudex/apps/api/internal/remote"
+	"github.com/coachpo/cloudex/apps/api/internal/store"
 	"github.com/distribution/reference"
+	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	settings, err := s.Store.Settings(r.Context())
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	codex, err := s.Store.CodexSettings(r.Context())
 	if err != nil {
 		failure(w, r, err)
 		return
@@ -22,7 +32,97 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"ssh_host":             settings.SSHHost,
 		"ssh_bind":             s.SSH.Bind.String(),
 		"agent_public_address": settings.AgentPublicAddress,
+		"codex_config_toml":    codex.ConfigTOML,
+		"codex_agents_md":      codex.AgentsMD,
 	}, nil)
+}
+
+func (s *Server) setCodexSettings(w http.ResponseWriter, r *http.Request) {
+	const maxFileBytes = 32 * 1024
+	// JSON can encode each byte of the files as a six-byte escape.
+	const maxBody = 6*2*maxFileBytes + 8*1024
+	invalid := func(message string) {
+		problem(w, r, http.StatusBadRequest, "INVALID_CODEX_SETTINGS", message)
+	}
+	var in struct {
+		ConfigTOML json.RawMessage `json:"config_toml"`
+		AgentsMD   json.RawMessage `json:"agents_md"`
+	}
+	if !parseWithLimit(w, r, &in, false, maxBody, func() {
+		invalid("config.toml and AGENTS.md must each be at most 32 KiB.")
+	}) {
+		return
+	}
+	var configTOML, agentsMD *string
+	if err := json.Unmarshal(in.ConfigTOML, &configTOML); err != nil || configTOML == nil {
+		invalid("config_toml must be a string.")
+		return
+	}
+	if err := json.Unmarshal(in.AgentsMD, &agentsMD); err != nil || agentsMD == nil {
+		invalid("agents_md must be a string.")
+		return
+	}
+	if len(*configTOML) > maxFileBytes || strings.ContainsRune(*configTOML, 0) {
+		invalid("config.toml must be at most 32 KiB and contain no NUL characters.")
+		return
+	}
+	if len(*agentsMD) > maxFileBytes || strings.ContainsRune(*agentsMD, 0) {
+		invalid("AGENTS.md must be at most 32 KiB and contain no NUL characters.")
+		return
+	}
+	var config map[string]any
+	configBytes := []byte(*configTOML)
+	if err := toml.Unmarshal(configBytes, &config); err != nil || hasUnsupportedCodexTOML(configBytes) {
+		invalid("config.toml must be valid TOML.")
+		return
+	}
+	for _, key := range []string{"model_provider", "model_providers", "model_catalog_json",
+		"cli_auth_credentials_store", "openai_base_url", "chatgpt_base_url"} {
+		if _, exists := config[key]; exists {
+			invalid("config.toml cannot set the reserved key " + key + ".")
+			return
+		}
+	}
+	settings := store.CodexSettings{ConfigTOML: *configTOML, AgentsMD: *agentsMD}
+	send(w, r, settings, s.Store.SetCodexSettings(r.Context(), settings))
+}
+
+func hasUnsupportedCodexTOML(config []byte) bool {
+	// go-toml accepts \e and year zero, which the launcher's tomllib rejects.
+	if !bytes.Contains(config, []byte(`\e`)) && !bytes.Contains(config, []byte("0000-")) {
+		return false
+	}
+	var parser unstable.Parser
+	parser.Reset(config)
+	for parser.NextExpression() {
+		if hasUnsupportedCodexTOMLNode(&parser, parser.Expression()) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUnsupportedCodexTOMLNode(parser *unstable.Parser, node *unstable.Node) bool {
+	switch node.Kind {
+	case unstable.LocalDate, unstable.LocalDateTime, unstable.DateTime:
+		return bytes.HasPrefix(node.Data, []byte("0000-"))
+	case unstable.String, unstable.Key:
+		raw := parser.Raw(node.Raw)
+		if len(raw) > 0 && raw[0] == '"' {
+			for i := bytes.IndexByte(raw, '\\'); i >= 0 && i+1 < len(raw); i = bytes.IndexByte(raw, '\\') {
+				if raw[i+1] == 'e' {
+					return true
+				}
+				raw = raw[i+2:]
+			}
+		}
+	}
+	for children := node.Children(); children.Next(); {
+		if hasUnsupportedCodexTOMLNode(parser, children.Node()) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) setWorkspaceImage(w http.ResponseWriter, r *http.Request) {

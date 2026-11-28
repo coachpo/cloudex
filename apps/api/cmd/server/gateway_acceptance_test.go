@@ -42,6 +42,7 @@ type acceptanceCase struct {
 	name, channel, expectedTransport string
 	fault                            fixtureFault
 	forceSSE, appServer, interactive bool
+	startupSettings                  *store.CodexSettings
 }
 
 type acceptanceClient struct {
@@ -86,6 +87,9 @@ func TestPinnedCodexGatewayMatrix(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) { runGatewayCase(t, tc, client) })
 			}
+			t.Run("chatgpt-startup-settings", func(t *testing.T) {
+				runGatewayCase(t, startupSettingsCase(t), client)
+			})
 		})
 	}
 	if dockerHost != "" {
@@ -109,6 +113,65 @@ func TestPinnedCodexGatewayMatrix(t *testing.T) {
 type acceptanceCommands struct {
 	cwd, sandbox string
 	make, tty    func(...string) *exec.Cmd
+}
+
+func startupSettingsCase(t *testing.T) acceptanceCase {
+	t.Helper()
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal("the startup settings case requires Python 3.11 or newer on PATH")
+	}
+	const agents = "# Fixture instructions\n\nAlways report CLOUDEX_GLOBAL_AGENTS.\n"
+	const mcp = `import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {}
+    if request["method"] == "initialize":
+        result = {
+            "protocolVersion": request["params"]["protocolVersion"],
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "cloudex-fixture", "version": "1"},
+        }
+    elif request["method"] == "tools/list":
+        result = {"tools": [{
+            "name": "fixture_ping", "description": "Ping the local fixture",
+            "inputSchema": {"type": "object", "properties": {}},
+        }]}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+`
+	config := fmt.Sprintf(`# Keep the administrator's formatting.
+
+model_context_window = 65536
+check_for_update_on_startup = false
+web_search = "disabled"
+[analytics]
+enabled = false
+[mcp_servers.cloudex_fixture]
+command = %q
+required = true
+args = ["-c", '''
+%s''']
+`, python, mcp)
+	return acceptanceCase{
+		channel: codexupstream.ChannelChatGPT, expectedTransport: "ws",
+		startupSettings: &store.CodexSettings{ConfigTOML: config, AgentsMD: agents},
+		fault: fixtureFault{onFirstGeneration: func(body fixtureResponseRequest) {
+			var instructionsVisible, toolVisible bool
+			for _, item := range body.Input {
+				instructionsVisible = instructionsVisible || bytes.Contains(item.Content, []byte("CLOUDEX_GLOBAL_AGENTS"))
+				toolVisible = toolVisible || item.Type == "additional_tools" && bytes.Contains(item.Tools, []byte("fixture_ping"))
+			}
+			if !instructionsVisible || !toolVisible {
+				t.Errorf("ChatGPT upstream did not receive global instructions and the MCP tool: instructions=%t tool=%t", instructionsVisible, toolVisible)
+				return
+			}
+			t.Log("ChatGPT WS received global AGENTS.md and fixture_ping in additional_tools")
+		}},
+	}
 }
 
 func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
@@ -171,6 +234,7 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 	}
 
 	var commands acceptanceCommands
+	var checkStartupFiles func()
 	if client.gatewayHost == "" {
 		info := runtime.Container{ID: "synthetic-container", State: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		workspace = finishAcceptanceWorkspace(t, ctx, db, op, info)
@@ -178,7 +242,27 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 		if err := service.ReconcileGateway(ctx, workspace, info, installed); err != nil {
 			t.Fatal(err)
 		}
-		commands = prepareNativeCodex(t, ctx, installed.token, origin, trust, base, fake.model, client.bin, tlsServer.Client())
+		if tc.startupSettings == nil {
+			commands = prepareNativeCodex(t, ctx, installed.token, origin, trust, base, fake.model, client.bin, tlsServer.Client())
+		} else {
+			save := acceptanceSettingsWriter(t, ctx, gateway, origin)
+			save(*tc.startupSettings)
+			var codexHome string
+			commands, codexHome = prepareNativeLauncher(t, ctx, installed, origin, trust, base, client.bin)
+			checkStartupFiles = func() {
+				assertAcceptanceFile(t, filepath.Join(codexHome, "config.toml"), tc.startupSettings.ConfigTOML)
+				assertAcceptanceFile(t, filepath.Join(codexHome, "AGENTS.md"), tc.startupSettings.AgentsMD)
+
+				save(store.CodexSettings{})
+				if output, err := commands.make("mcp", "list", "--json").CombinedOutput(); err != nil {
+					t.Fatalf("restart after clearing settings: %v\n%s", err, output)
+				}
+				assertAcceptanceFile(t, filepath.Join(codexHome, "config.toml"), "")
+				if _, err := os.Stat(filepath.Join(codexHome, "AGENTS.md")); !os.IsNotExist(err) {
+					t.Fatalf("cleared AGENTS.md should be absent: %v", err)
+				}
+			}
+		}
 	} else {
 		commands = prepareContainerCodex(t, ctx, db, op, workspace, service, trust, client.gatewayHost)
 	}
@@ -193,6 +277,9 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 		runAcceptanceInteractive(t, commands)
 	default:
 		runAcceptanceExec(t, commands, tc.forceSSE, unknown)
+	}
+	if checkStartupFiles != nil {
+		checkStartupFiles()
 	}
 	catalogs, upgrades, titles, rounds := fake.snapshot()
 	if other.requests.Load() != 0 {
@@ -369,6 +456,87 @@ func (c *acceptanceCredential) InstallGatewayCredential(_ context.Context, _ run
 		Origin: install.Origin, BindingRevision: install.BindingRevision, GrantID: install.GrantID, GrantEpoch: install.GrantEpoch,
 	}
 	return c.confirmation, nil
+}
+
+func acceptanceSettingsWriter(t *testing.T, ctx context.Context, gateway http.Handler, origin string) func(store.CodexSettings) {
+	t.Helper()
+	var session *http.Cookie
+	call := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(ctx, method, "/api/v1"+path, bytes.NewReader(data))
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Content-Type", "application/json")
+		if session != nil {
+			req.AddCookie(session)
+		}
+		w := httptest.NewRecorder()
+		gateway.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s %s returned %d: %s", method, path, w.Code, w.Body)
+		}
+		return w
+	}
+	w := call(http.MethodPost, "/auth/setup", map[string]string{"username": "admin", "password": "synthetic-password"})
+	session = w.Result().Cookies()[0]
+	return func(settings store.CodexSettings) {
+		t.Helper()
+		call(http.MethodPut, "/settings/codex", map[string]string{
+			"config_toml": settings.ConfigTOML, "agents_md": settings.AgentsMD,
+		})
+	}
+}
+
+func prepareNativeLauncher(t *testing.T, ctx context.Context, cred *acceptanceCredential, origin string, trust []byte, base, bin string) (acceptanceCommands, string) {
+	t.Helper()
+	const bridge = `import importlib.util
+import sys
+from pathlib import Path
+
+script, binary, credential = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("workspace_codex", script)
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+launcher.CODEX = binary
+launcher.CREDENTIAL = Path(credential)
+launcher.main(sys.argv[4:])
+`
+	script, err := filepath.Abs("../../../../docker/workspace-codex.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := filepath.Join(base, "gateway-ca.pem")
+	credential := filepath.Join(base, "gateway.json")
+	fields, err := json.Marshal(map[string]any{
+		"origin": origin, "token": cred.token, "grant_id": cred.confirmation.GrantID, "grant_epoch": cred.confirmation.GrantEpoch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAcceptanceFile(t, cert, trust)
+	writeAcceptanceFile(t, credential, fields)
+	env := append(acceptanceProxyEnv("127.0.0.1", cert), "HOME="+base, "PATH=/usr/bin:/bin")
+	prefix := []string{"-B", "-c", bridge, script, bin, credential}
+	home := filepath.Join(base, ".codex", "cloudex", fmt.Sprintf("%s-g%d", cred.confirmation.GrantID, cred.confirmation.GrantEpoch))
+	return acceptanceCommands{cwd: base, sandbox: "read-only", make: func(args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "python3", append(prefix, args...)...)
+		cmd.Env, cmd.Dir = env, base
+		return cmd
+	}}, home
+}
+
+func assertAcceptanceFile(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("%s did not preserve the saved settings verbatim", filepath.Base(path))
+	}
 }
 
 func prepareNativeCodex(t *testing.T, ctx context.Context, token, origin string, trust []byte, base, model, bin string, client *http.Client) acceptanceCommands {

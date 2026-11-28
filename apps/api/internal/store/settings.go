@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 )
 
@@ -32,6 +33,26 @@ func (s *Store) SetAccessSettings(ctx context.Context, sshHost, agentAddress str
 func (s *Store) SetWorkspaceImage(ctx context.Context, image string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('setting.workspace_image',?)
  ON CONFLICT (key) DO UPDATE SET value=excluded.value`, image)
+	return err
+}
+
+type CodexSettings struct {
+	ConfigTOML string `json:"config_toml"`
+	AgentsMD   string `json:"agents_md"`
+}
+
+func (s *Store) CodexSettings(ctx context.Context) (CodexSettings, error) {
+	var settings CodexSettings
+	err := s.db.QueryRowContext(ctx, `SELECT
+ COALESCE((SELECT value FROM meta WHERE key='setting.codex_config_toml'), ''),
+ COALESCE((SELECT value FROM meta WHERE key='setting.codex_agents_md'), '')`).
+		Scan(&settings.ConfigTOML, &settings.AgentsMD)
+	return settings, err
+}
+
+func (s *Store) SetCodexSettings(ctx context.Context, settings CodexSettings) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('setting.codex_config_toml',?),('setting.codex_agents_md',?)
+ ON CONFLICT (key) DO UPDATE SET value=excluded.value`, settings.ConfigTOML, settings.AgentsMD)
 	return err
 }
 

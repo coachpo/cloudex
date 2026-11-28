@@ -48,6 +48,7 @@ func (s *Service) GatewayHandler() http.Handler {
 	gateway := &gatewayTransport{service: s, turnStates: make(map[string]scopedTurnState)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+GatewayPath+"/models", gateway.models)
+	mux.HandleFunc("GET "+GatewayPath+"/codex-settings", gateway.codexSettings)
 	mux.HandleFunc("GET "+GatewayPath+"/responses", gateway.websocket)
 	mux.HandleFunc("POST "+GatewayPath+"/responses", gateway.sse)
 	return mux
@@ -95,6 +96,30 @@ func (g *gatewayTransport) models(w http.ResponseWriter, r *http.Request) {
 		writeStarted = true
 		w.Header().Set("Content-Type", "application/json")
 		return writeGatewayChunk(w, redactResponseJSON(body, upstream.Token), false)
+	})
+	if err != nil && !writeStarted {
+		writeGatewayFailure(w, err)
+	}
+}
+
+func (g *gatewayTransport) codexSettings(w http.ResponseWriter, r *http.Request) {
+	a, err := g.admit(w, r)
+	if err != nil {
+		writeGatewayFailure(w, err)
+		return
+	}
+	defer a.Release()
+	settings, err := g.service.Store.CodexSettings(a.Context)
+	if err != nil {
+		writeGatewayFailure(w, err)
+		return
+	}
+	body, _ := json.Marshal(settings)
+	writeStarted := false
+	err = a.WithWrite(0, func() error {
+		writeStarted = true
+		w.Header().Set("Content-Type", "application/json")
+		return writeGatewayChunk(w, body, false)
 	})
 	if err != nil && !writeStarted {
 		writeGatewayFailure(w, err)

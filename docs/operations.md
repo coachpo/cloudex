@@ -66,6 +66,17 @@ codex exec --skip-git-repo-check --json 'Return CLOUDEX_OK.'
 
 两种浏览器登录均可使用。先在 Cloudex 发起授权并在 OpenAI 完成登录。若跳转到 `127.0.0.1` 后浏览器显示无法连接，从地址栏复制完整 URL，回到发起授权的控制台，选择 **手动提交回调 URL**，粘贴并提交，再核对身份并确认保存。管理员电脑无需监听回环端口或建立 SSH 隧道。此入口使用原授权的 `redirect_uri`，OpenAI 对两条渠道的手动提交方式的正式支持均未确认。
 
+### 配置 Codex 启动文件
+
+在 **设置 → Codex 配置** 编辑 `config.toml` 和 `AGENTS.md` 并保存。所有绑定授权且使用支持启动配置下发的工作镜像的 Workspace 共用这两份文件。保存后，新启动的 Codex 会话使用最新配置，Codex Desktop 重新连接远端 App Server 后生效。后续保存无需重建 Workspace。
+
+Codex 或 Codex Desktop 写入 `CODEX_HOME/config.toml` 的内容会在下一次启动时被控制台保存的内容覆盖。需要信任项目时，把信任配置保存到控制台的 `config.toml`。
+
+```toml
+[projects."/workspace/project"]
+trust_level = "trusted"
+```
+
 ### 恢复授权与凭据
 
 - **需重新授权。** 对受影响授权选择重新授权，使用原注册和同一已验证身份。刷新结果未知时需重新授权，以免再次使用可能已轮换的旧 refresh token。

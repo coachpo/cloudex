@@ -26,7 +26,10 @@ async page => {
     upstream_user_id: "test-manual-user", workspaces: [] };
   const fixtures = {
     "/auth/session": { username: "fixture" },
-    "/settings": { workspace_image: "workspace:fixture", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "" },
+    "/settings": {
+      workspace_image: "workspace:fixture", ssh_host: "", ssh_bind: "127.0.0.1", agent_public_address: "",
+      codex_config_toml: "", codex_agents_md: "",
+    },
     "/settings/ssh-keys": { public_keys: [] },
     "/hosts": [],
     "/hosts/test-host": { id: "test-host", name: "Fixture", reachable: true, healthy: true },

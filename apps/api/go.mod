@@ -10,6 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
+	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/pressly/goose/v3 v3.30.1
 	golang.org/x/crypto v0.59.0
 	golang.org/x/net v0.62.0
