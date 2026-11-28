@@ -2,16 +2,19 @@
 
 版本标签从 `v0.0.1` 开始，该版本包含此前的全部提交。更早的分节以提交定位历史变更。
 
-## 未发布
+## v0.0.3
 
 - 同一轮工具往返中触发自动压缩后，Codex 在新上下文窗口的续写可经 WS 和 HTTP/SSE 正常完成，不再收到 `409 submission_outcome_unknown`。[流式转发](docs/codex-gateway.md#流式转发)
+- Workspace 镜像 `ghcr.io/coachpo/cloudex-workspace` 以 `linux/amd64` 与 `linux/arm64` 多架构发布，两种架构分别通过版本核对和网关验收后才更新标签。原单架构的 `codex-0.172.0` 已按多架构重新发布，其中的启动器在启动 Codex 前读取控制面保存的启动配置，须搭配 v0.0.2 或更新的 APP。GHCR 不再提供 v0.0.1 的 APP 镜像和原单架构镜像。[预构建镜像](docs/operations.md#预构建镜像)
+
+## v0.0.2
+
 - 管理员可在设置页统一编辑 Codex 的 `config.toml` 和 `AGENTS.md`。绑定授权的 Workspace 在下一次启动 Codex 时读取保存的版本，Desktop 重新连接后生效。[Codex 启动配置](docs/operations.md#配置-codex-启动文件)
 - 新建 Workspace 时可使用随机名称或掷骰子换一个，SSH 别名优先使用可读的 Workspace 名称，Codex 设备码支持一键复制和打开验证页时复制。
-- Workspace 镜像 `ghcr.io/coachpo/cloudex-workspace` 以 `linux/amd64` 与 `linux/arm64` 多架构发布，两种架构分别通过版本核对和网关验收后才更新标签。原单架构的 `codex-0.172.0` 已按多架构重新发布。[预构建镜像](docs/operations.md#预构建镜像)
 
 ## v0.0.1
 
-- 首个版本标签。APP 镜像 `ghcr.io/coachpo/cloudex-api`、`cloudex-agent` 和 `cloudex-web` 以 `linux/amd64` 与 `linux/arm64` 多架构发布，带 `0.0.1`、`0.0` 和 `latest` 等标签。[预构建镜像](docs/operations.md#预构建镜像)
+- 首个版本标签。APP 镜像 `ghcr.io/coachpo/cloudex-api`、`cloudex-agent` 和 `cloudex-web` 自此按发布标签以 `linux/amd64` 与 `linux/arm64` 多架构发布。[预构建镜像](docs/operations.md#预构建镜像)
 
 ### Workspace 工作流
 
