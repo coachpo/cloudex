@@ -1,11 +1,18 @@
 # 变更记录
 
-尚无版本标签。下列提交用于定位历史变更。
+版本标签从 `v0.0.1` 开始，该版本包含此前的全部提交。更早的分节以提交定位历史变更。
 
-## Workspace 工作流（未发布）
+## 未发布
 
 - 管理员可在设置页统一编辑 Codex 的 `config.toml` 和 `AGENTS.md`。绑定授权的 Workspace 在下一次启动 Codex 时读取保存的版本，Desktop 重新连接后生效。[Codex 启动配置](docs/operations.md#配置-codex-启动文件)
 - 新建 Workspace 时可使用随机名称或掷骰子换一个，SSH 别名优先使用可读的 Workspace 名称，Codex 设备码支持一键复制和打开验证页时复制。
+- Workspace 镜像 `ghcr.io/coachpo/cloudex-workspace` 以 `linux/amd64` 与 `linux/arm64` 多架构发布，两种架构分别通过版本核对和网关验收后才更新标签。原单架构的 `codex-0.172.0` 已按多架构重新发布。[预构建镜像](docs/operations.md#预构建镜像)
+
+## v0.0.1
+
+- 首个版本标签。APP 镜像 `ghcr.io/coachpo/cloudex-api`、`cloudex-agent` 和 `cloudex-web` 以 `linux/amd64` 与 `linux/arm64` 多架构发布，带 `0.0.1`、`0.0` 和 `latest` 等标签。[预构建镜像](docs/operations.md#预构建镜像)
+
+### Workspace 工作流
 
 - Workspace 可绑定独立的 Sign in with Codex 或 Sign in with ChatGPT 授权。Codex 网关优先走 Responses WebSocket，并在生成未提交的条件下保留 HTTP/SSE 回退。[Codex 网关](docs/operations.md#codex-网关)
 - **Hosts → Add host** 支持 SSH 直连。管理员核对主机指纹后，可使用密码或私钥接入远端 Docker，直接在该 Host 放置和管理 Workspace。[加入远程 Host](docs/operations.md#加入远程-host)
@@ -16,7 +23,7 @@
 - Workspace 的授权绑定跨容器重建保留。运行实例从控制面获得独立的网关凭据。工作树和 SSH 主机身份使用独立卷。容器替换从镜像初始化 home。[数据保留](docs/operations.md#数据保留)
 - 同一容器切回同一份授权的同一代次后，可恢复原 Codex 会话并续聊。[恢复授权与凭据](docs/operations.md#恢复授权与凭据)
 
-## 管理员账号与界面语言（未发布）
+### 管理员账号与界面语言
 
 - 首次从控制台创建管理员，重启后沿用原账号。更改用户名或密码后当前浏览器继续登录，其他会话失效。丢失凭据可用 `reset-admin` 重新初始化。[账号找回](docs/operations.md#管理员账号)
 - 控制台按浏览器语言显示简体中文或英文，包括错误、日期和数字格式。主题选择可跨访问保留。
