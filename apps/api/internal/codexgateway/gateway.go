@@ -352,14 +352,7 @@ func (g *gatewayTransport) reserve(ctx context.Context, scope requestScope, payl
 	prev, err := g.service.Store.Submission(ctx, scope.key())
 	switch {
 	case err == nil:
-		advances := continuation && gatewayDigest(payload.previous) == prev.ResponseID
-		if len(prev.CallIDs) != 0 {
-			advances = true
-			for _, expected := range prev.CallIDs {
-				advances = advances && slices.Contains(payload.toolResults, expected)
-			}
-		}
-		if prev.Status != "completed" && prev.Status != "interrupted" || prev.Model != payload.model || !advances {
+		if !advances(prev, payload, continuation) {
 			return store.Submission{}, outcomeUnknown()
 		}
 	case errors.Is(err, store.ErrMissing):
@@ -367,11 +360,41 @@ func (g *gatewayTransport) reserve(ctx context.Context, scope requestScope, payl
 	default:
 		return store.Submission{}, err
 	}
-	next, err := g.service.Store.CompareSubmission(ctx, scope.key(), prev.Sequence, store.Submission{Status: "submitting", Model: payload.model})
+	next := store.Submission{Status: "submitting", Model: payload.model}
+	if payload.compaction {
+		next.CompactionWindow = payload.window
+	}
+	next, err = g.service.Store.CompareSubmission(ctx, scope.key(), prev.Sequence, next)
 	if errors.Is(err, store.ErrConflict) {
 		return store.Submission{}, outcomeUnknown()
 	}
 	return next, err
+}
+
+// advances reports whether a request continues the turn's previous submission
+// rather than repeating a generation whose outcome the client may have missed.
+func advances(prev store.Submission, payload responsesPayload, continuation bool) bool {
+	if prev.Model != payload.model {
+		return false
+	}
+	if prev.CompactionWindow != nil {
+		// A completed compaction closes its context window. Codex continues
+		// the turn in the next window, where the summary replaces the earlier
+		// tool history. The continuation then becomes the turn's submission.
+		return prev.Status == "completed" && payload.window != nil && *payload.window == *prev.CompactionWindow+1
+	}
+	if prev.Status != "completed" && prev.Status != "interrupted" {
+		return false
+	}
+	if len(prev.CallIDs) != 0 {
+		for _, expected := range prev.CallIDs {
+			if !slices.Contains(payload.toolResults, expected) {
+				return false
+			}
+		}
+		return true
+	}
+	return continuation && gatewayDigest(payload.previous) == prev.ResponseID
 }
 
 func (g *gatewayTransport) complete(ctx context.Context, scope requestScope, current store.Submission, event responseProgress) error {
@@ -390,6 +413,7 @@ func (g *gatewayTransport) complete(ctx context.Context, scope requestScope, cur
 	}
 	return g.service.Store.CompleteSubmission(ctx, scope.key(), current.Sequence, store.Submission{
 		Status: status, Model: current.Model, ResponseID: response, CallIDs: event.calls,
+		CompactionWindow: current.CompactionWindow,
 	}, store.SubmissionCompletion{
 		SessionDigest: scope.session(), References: event.references, ToolCalls: event.toolCalls,
 		ToolResults: event.toolResults, HistoryReferences: event.historyReferences,

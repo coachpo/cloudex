@@ -77,6 +77,10 @@ func TestPinnedCodexGatewayMatrix(t *testing.T) {
 		{name: "chatgpt-app-server", channel: codexupstream.ChannelChatGPT, expectedTransport: "ws", appServer: true},
 		{name: "codex-stream-lost", channel: codexupstream.ChannelCodex, expectedTransport: "ws", fault: fixtureFault{dropStream: true}},
 		{name: "chatgpt-terminal-lost", channel: codexupstream.ChannelChatGPT, expectedTransport: "ws", fault: fixtureFault{dropTerminal: true}},
+		{name: "codex-ws-compaction", channel: codexupstream.ChannelCodex, expectedTransport: "ws", fault: fixtureFault{compactMidTurn: true}},
+		{name: "chatgpt-ws-compaction", channel: codexupstream.ChannelChatGPT, expectedTransport: "ws", fault: fixtureFault{compactMidTurn: true}},
+		{name: "codex-sse-compaction", channel: codexupstream.ChannelCodex, expectedTransport: "sse", forceSSE: true, fault: fixtureFault{compactMidTurn: true}},
+		{name: "chatgpt-sse-compaction", channel: codexupstream.ChannelChatGPT, expectedTransport: "sse", forceSSE: true, fault: fixtureFault{compactMidTurn: true}},
 	}
 	if bin != "" {
 		if !filepath.IsAbs(bin) {
@@ -276,7 +280,7 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 	case tc.interactive:
 		runAcceptanceInteractive(t, commands)
 	default:
-		runAcceptanceExec(t, commands, tc.forceSSE, unknown)
+		runAcceptanceExec(t, commands, tc.forceSSE, unknown, tc.fault.compactMidTurn)
 	}
 	if checkStartupFiles != nil {
 		checkStartupFiles()
@@ -285,7 +289,12 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 	if other.requests.Load() != 0 {
 		t.Fatal("the inactive authorization channel received an upstream request")
 	}
-	if catalogs == 0 || tc.forceSSE && upgrades != 0 || !tc.forceSSE && !tc.interactive && upgrades != 1 ||
+	// Codex opens a new WebSocket for the context window after a compaction.
+	expectedUpgrades := 1
+	if tc.fault.compactMidTurn {
+		expectedUpgrades = 2
+	}
+	if catalogs == 0 || tc.forceSSE && upgrades != 0 || !tc.forceSSE && !tc.interactive && upgrades != expectedUpgrades ||
 		tc.interactive && (upgrades < 1 || upgrades > 2) ||
 		titles > 1 || titles > 0 && !tc.interactive {
 		t.Fatalf("catalog and Upgrade observations: catalog=%d Upgrade=%d title=%d", catalogs, upgrades, titles)
@@ -295,6 +304,19 @@ func runGatewayCase(t *testing.T, tc acceptanceCase, client acceptanceClient) {
 			t.Fatalf("expected one blocked fallback and one upstream submission, got fallback=%d upstream=%+v", codexFallbacks.Load(), rounds)
 		}
 		t.Logf("%s %s → %s [%s]: one accepted generation, no terminal, Codex HTTPS fallback received 409 before leaving the gateway", tc.channel, rounds[0].Transport, rounds[0].Path, rounds[0].Identity)
+		return
+	}
+	if tc.fault.compactMidTurn {
+		if len(rounds) != 3 {
+			t.Fatalf("expected a generation, a same-turn compaction and one continuation, observed %+v", rounds)
+		}
+		for i, r := range rounds {
+			if r.Transport != tc.expectedTransport || r.Compaction != (i == 1) || r.Terminal != "response.completed" {
+				t.Fatalf("unexpected compaction submission %d: %+v", i+1, r)
+			}
+			t.Logf("%s %s %s submission=%d compaction=%t previous_response_id=%q tool_result=%q terminal=%s",
+				tc.channel, r.Transport, r.Path, i+1, r.Compaction, r.Previous, r.ToolResult, r.Terminal)
+		}
 		return
 	}
 	if len(rounds) != 3 {
@@ -677,11 +699,15 @@ func prepareContainerCodex(t *testing.T, ctx context.Context, db *store.Store, o
 	}
 }
 
-func runAcceptanceExec(t *testing.T, commands acceptanceCommands, forceSSE, unknown bool) {
+func runAcceptanceExec(t *testing.T, commands acceptanceCommands, forceSSE, unknown, compact bool) {
 	t.Helper()
 	var args []string
 	if forceSSE {
 		args = append(args, "-c", "model_providers.cloudex.supports_websockets=false")
+	}
+	if compact {
+		args = append(args, "-c", fmt.Sprintf("model_auto_compact_token_limit=%d", fixtureCompactLimit),
+			"-c", fmt.Sprintf("compact_prompt=%q", fixtureCompactPrompt))
 	}
 	args = append(args, "exec", "--json", "--ephemeral", "-s", commands.sandbox, "--skip-git-repo-check", "Call the fixture tools and report their result.")
 	output, err := commands.make(args...).CombinedOutput()
@@ -695,6 +721,9 @@ func runAcceptanceExec(t *testing.T, commands acceptanceCommands, forceSSE, unkn
 	}
 	if err != nil || !bytes.Contains(output, []byte(fixtureSuccess)) || !bytes.Contains(output, []byte(`"type":"turn.completed"`)) {
 		t.Fatalf("Codex did not complete the fixture turn: %v\n%s", err, output)
+	}
+	if compact {
+		return // The summary request changes the turn's usage accounting.
 	}
 	var fields struct {
 		Type  string

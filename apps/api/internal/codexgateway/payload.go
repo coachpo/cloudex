@@ -17,6 +17,8 @@ type responsesPayload struct {
 	kind, model        string
 	previous, response string
 	metadata           map[string]string
+	window             *int64
+	compaction         bool
 	warmup             bool
 	references         []store.SubmissionReference
 	toolResults        []string
@@ -70,6 +72,18 @@ func parseResponses(data []byte, webSocket bool) (responsesPayload, error) {
 	}
 	if raw := p.fields["client_metadata"]; raw != nil && json.Unmarshal(raw, &p.metadata) != nil {
 		return p, invalidRequest("client_metadata", "The client metadata is invalid.")
+	}
+	// Each request carries its own turn metadata in the body. A WebSocket's
+	// handshake header keeps the metadata of the request that opened it.
+	if raw := p.metadata[strings.ToLower(turnMetadataHeader)]; raw != "" {
+		var turn struct {
+			RequestKind string `json:"request_kind"`
+			Window      *int64 `json:"window_number"`
+		}
+		if json.Unmarshal([]byte(raw), &turn) != nil {
+			return p, invalidRequest("client_metadata", "The Codex turn metadata is invalid.")
+		}
+		p.window, p.compaction = turn.Window, turn.RequestKind == "compaction"
 	}
 	if raw := p.fields["input"]; raw != nil && raw[0] == '[' {
 		var items []json.RawMessage

@@ -19,16 +19,23 @@ type Submission struct {
 	Model      string
 	ResponseID string
 	CallIDs    []string
+	// CompactionWindow is the Codex context window a compaction request
+	// summarized. It is nil for every other request.
+	CompactionWindow *int64
 }
 
 func (s *Store) Submission(ctx context.Context, key SubmissionKey) (Submission, error) {
 	var submission Submission
 	var callIDs string
-	err := s.db.QueryRowContext(ctx, `SELECT sequence,status,model,response_id,call_ids FROM gateway_submissions
+	var window sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT sequence,status,model,response_id,call_ids,compaction_window FROM gateway_submissions
  WHERE credential_digest=? AND run_id=? AND turn_id=?`, key.CredentialDigest, key.RunID, key.TurnID).
-		Scan(&submission.Sequence, &submission.Status, &submission.Model, &submission.ResponseID, &callIDs)
+		Scan(&submission.Sequence, &submission.Status, &submission.Model, &submission.ResponseID, &callIDs, &window)
 	if err != nil {
 		return Submission{}, missing(err)
+	}
+	if window.Valid {
+		submission.CompactionWindow = &window.Int64
 	}
 	return submission, json.Unmarshal([]byte(callIDs), &submission.CallIDs)
 }
@@ -56,14 +63,14 @@ func compareSubmission(ctx context.Context, tx *sql.Tx, key SubmissionKey, expec
 	}
 	if expectedSequence == 0 {
 		result, err := tx.ExecContext(ctx, `INSERT INTO gateway_submissions
- (credential_digest,run_id,turn_id,sequence,status,model,response_id,call_ids)
- VALUES (?,?,?,1,?,?,?,?) ON CONFLICT DO NOTHING`, key.CredentialDigest, key.RunID, key.TurnID,
-			next.Status, next.Model, next.ResponseID, string(callIDs))
+ (credential_digest,run_id,turn_id,sequence,status,model,response_id,call_ids,compaction_window)
+ VALUES (?,?,?,1,?,?,?,?,?) ON CONFLICT DO NOTHING`, key.CredentialDigest, key.RunID, key.TurnID,
+			next.Status, next.Model, next.ResponseID, string(callIDs), next.CompactionWindow)
 		return affected(result, err, ErrConflict)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE gateway_submissions SET sequence=sequence+1,status=?,response_id=?,call_ids=?
+	result, err := tx.ExecContext(ctx, `UPDATE gateway_submissions SET sequence=sequence+1,status=?,response_id=?,call_ids=?,compaction_window=?
  WHERE credential_digest=? AND run_id=? AND turn_id=? AND sequence=? AND model=?`, next.Status, next.ResponseID, string(callIDs),
-		key.CredentialDigest, key.RunID, key.TurnID, expectedSequence, next.Model)
+		next.CompactionWindow, key.CredentialDigest, key.RunID, key.TurnID, expectedSequence, next.Model)
 	return affected(result, err, ErrConflict)
 }
 

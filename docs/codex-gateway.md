@@ -45,12 +45,9 @@ Codex 启动器按授权 ID 和授权代次选择容器内的会话空间。同�
 
 网关对每条下游 Responses WS 建立对应的上游连接。WS 只在发出它的有效连接内接收 `previous_response_id`，工具结果按 `call_id` 及逻辑会话核对。HTTP/SSE 续轮用输入历史交回工具结果。切回原授权后，同一容器、授权代次和会话下已获上游完成确认的完整工具调用和结果可作为新一轮的历史输入。旧绑定的未完成工具调用、单独回传的旧工具结果和其他授权或 Workspace 的引用会在转发前遭拒。客户端中断停止其转发，对上游已接受的工作需要以实际中断确认或结果未知表示。
 
-生成尚未提交时，上游明确拒绝 Upgrade、返回无效升级响应，或 ChatGPT 握手返回 `403 subscription_sharing_route_not_supported`，网关会用 `426` 让固定版客户端以同一授权和同一模型回退 HTTP/SSE。其他权限失败和限流保留上游语义。已写出生成，或因断线、进程退出而无法确定是否写出时，网关记录该次提交，防止客户端自动改用另一传输重复发出请求。客户端明确引用上一轮交付的响应或工具调用才能推进相关续写。
+生成尚未提交时，上游明确拒绝 Upgrade、返回无效升级响应，或 ChatGPT 握手返回 `403 subscription_sharing_route_not_supported`，网关会用 `426` 让固定版客户端以同一授权和同一模型回退 HTTP/SSE。其他权限失败和限流保留上游语义。已写出生成，或因断线、进程退出而无法确定是否写出时，网关记录该次提交，防止客户端自动改用另一传输重复发出请求。客户端明确引用上一轮交付的响应或工具调用才能推进相关续写。同一 turn 内的压缩收到 `response.completed` 后结束其上下文窗口，网关按客户端轮次元数据中的 `request_kind` 和 `window_number` 只接受一次进入下一窗口的续写。压缩未完成，或重放压缩及其后的续写时，网关仍按提交结果未知拒绝。[固定版 Codex 请求元数据](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core/src/responses_metadata.rs)
 
 上游成功响应缺少 `Content-Type` 时，网关先在有限字节和时限内确认首个 Responses SSE 事件，支持 LF、CRLF、CR 换行和流首的 UTF-8 BOM，再以 `text/event-stream` 向客户端转发事件。仅用 SSE 事件名标识的 Responses 事件会补齐客户端所需的 JSON `type`。无法确认流格式时保留提交结果未知的状态。HTTP 和流内错误保留上游错误种类、适用字段和重试信息。只有 `response.completed` 表示完成。流内失败、未完成、中断或提前断流分别保留实际状态，缺少上游 usage 时将用量视为未知。[固定版 Codex 回退逻辑](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core/src/responses_retry.rs) · [上游错误与恢复](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
-
-已知限制。Codex `0.172.0` 通过 ChatGPT HTTP/SSE 在同一轮工具往返中触发自动压缩时，压缩可经 `POST /g/v1/responses` 完成，紧随其后的同轮续写会收到 `409 submission_outcome_unknown`。此场景在受控假上游观测到。[受控验收](codex-gateway-e2e.md#固定客户端与受控上游)
-
 ## 上游公开支持边界
 
 - **Sign in with Codex。** 官方文档覆盖在本人远端机器运行官方客户端的登录方式。App Server 文档说明已有本地或开源应用可继续使用其认证，建议迁移到 SIWC，商业或托管服务不在其许可范围内。公开资料对新第三方网关直接复用第一方 Codex 注册、长期持有多个授权并直连 Codex 后端的正式支持未确认。[官方远端登录](https://learn.chatgpt.com/docs/auth#login-on-headless-devices) · [App Server 认证说明](https://learn.chatgpt.com/docs/app-server#auth-endpoints)

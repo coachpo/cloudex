@@ -589,6 +589,68 @@ func TestGatewayClientCannotReplayAfterLosingTerminal(t *testing.T) {
 	}
 }
 
+func TestGatewayCompactionAllowsOneContinuationInTheNextWindow(t *testing.T) {
+	var generations atomic.Int32
+	upstream := transportCatalog(t, "chatgpt", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		n := generations.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_%d\"}}\n\n", n)
+		if !strings.Contains(string(body), "lose terminal") {
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_%d\"}}\n\n", n)
+		}
+	})
+	adapter := transportAdapter(t, "chatgpt", upstream.URL, upstream.Client())
+	f := newTransportFixture(t, adapter)
+	_, token := f.workspace("compaction", f.grant(adapter))
+	send := func(turn, kind string, window int, input string) (int, string) {
+		t.Helper()
+		metadata, _ := json.Marshal(map[string]string{
+			"x-codex-turn-metadata": fmt.Sprintf(`{"turn_id":%q,"request_kind":%q,"window_number":%d}`, turn, kind, window),
+		})
+		body := fmt.Sprintf(`{"model":%q,"store":false,"stream":true,"input":[{"role":"user","type":"message","content":%q}],"client_metadata":%s}`,
+			transportModel, input, metadata)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, f.server.URL+GatewayPath+"/responses", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header = transportHeaders(token)
+		req.Header.Set(turnMetadataHeader, fmt.Sprintf(`{"thread_id":"test-thread","turn_id":%q}`, turn))
+		resp, err := f.server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		output, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(output)
+	}
+	expect := func(step string, status int, body string, completed bool, total int32) {
+		t.Helper()
+		if completed && (status != 200 || !strings.Contains(body, "response.completed")) ||
+			!completed && (status != 409 || !strings.Contains(body, "submission_outcome_unknown")) || generations.Load() != total {
+			t.Fatalf("%s: status=%d generations=%d body=%s", step, status, generations.Load(), body)
+		}
+	}
+
+	status, body := send("compacted", "compaction", 0, "summarize")
+	expect("compaction", status, body, true, 1)
+	status, body = send("compacted", "turn", 1, "continue with the summary")
+	expect("continuation in the next window", status, body, true, 2)
+	status, body = send("compacted", "turn", 1, "continue with the summary")
+	expect("replayed continuation", status, body, false, 2)
+
+	status, body = send("replayed", "compaction", 0, "summarize")
+	expect("second turn compaction", status, body, true, 3)
+	status, body = send("replayed", "compaction", 0, "summarize")
+	expect("replayed compaction", status, body, false, 3)
+
+	if status, body = send("lost", "compaction", 0, "summarize and lose terminal"); status != 200 || generations.Load() != 4 {
+		t.Fatalf("compaction without terminal: status=%d generations=%d body=%s", status, generations.Load(), body)
+	}
+	status, body = send("lost", "turn", 1, "continue with the summary")
+	expect("continuation after a compaction without terminal", status, body, false, 4)
+}
+
 type observedWriteConn struct {
 	net.Conn
 	write func([]byte) (int, error)

@@ -32,6 +32,13 @@ const (
 	fixtureSuccess      = "CLOUDEX_TOOL_CHAIN_OK"
 	fixtureSeed         = "CLOUDEX_SEED=314159"
 	fixtureDerived      = "CLOUDEX_DERIVED_314159"
+	// The compaction case configures this prompt so the fixture can recognize
+	// Codex's summary request without seeing client turn metadata.
+	fixtureCompactPrompt  = "CLOUDEX_COMPACT_PROMPT"
+	fixtureCompactSummary = "CLOUDEX_COMPACT_SUMMARY"
+	// The first generation reports more input than the compaction case's
+	// auto-compaction limit, so Codex compacts before continuing the turn.
+	fixtureCompactLimit = 1000
 )
 
 // This fixture publishes native Codex ModelInfo over the private catalog and
@@ -61,6 +68,7 @@ type fixtureInference struct {
 	Path, Transport, Identity, Model string
 	Previous, ToolResult, Terminal   string
 	InputTokens, OutputTokens        int
+	Compaction                       bool
 }
 
 type fixtureOAuth struct {
@@ -73,6 +81,7 @@ type fixtureFault struct {
 	untypedSSE         bool
 	dropStream         bool
 	dropTerminal       bool
+	compactMidTurn     bool
 	beforeExchange     func(context.Context)
 	onFirstGeneration  func(fixtureResponseRequest)
 }
@@ -469,14 +478,13 @@ func (f *gatewayFixture) respond(w http.ResponseWriter, r *http.Request, body fi
 		return write([]byte(`{"type":"response.output_item.done","item":{"id":"message_title","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"title\":\"Run fixture tools\"}","annotations":[]}]}}`)) == nil &&
 			write([]byte(`{"type":"response.completed","response":{"id":"response_title","status":"completed"}}`)) == nil
 	}
+	if f.fault.compactMidTurn {
+		return f.respondCompaction(r, body, transport, write)
+	}
 	f.mu.Lock()
 	round := len(f.rounds)
-	identity := "fixture-chatgpt-subject/issued:fixture-issued-client"
-	if f.channel == codexupstream.ChannelCodex {
-		identity = "fixture-codex-user/" + f.account
-	}
 	f.rounds = append(f.rounds, fixtureInference{
-		Path: r.URL.Path, Transport: transport, Identity: identity,
+		Path: r.URL.Path, Transport: transport, Identity: f.identity(),
 		Model: body.Model, Previous: body.PreviousResponseID,
 	})
 	f.mu.Unlock()
@@ -563,6 +571,67 @@ func (f *gatewayFixture) respond(w http.ResponseWriter, r *http.Request, body fi
 	f.rounds[round].InputTokens, f.rounds[round].OutputTokens = usageIn, usageOut
 	f.mu.Unlock()
 	return write(terminal) == nil
+}
+
+func (f *gatewayFixture) identity() string {
+	if f.channel == codexupstream.ChannelCodex {
+		return "fixture-codex-user/" + f.account
+	}
+	return "fixture-chatgpt-subject/issued:fixture-issued-client"
+}
+
+// respondCompaction serves a tool call whose usage exceeds the auto-compaction
+// limit, Codex's same-turn summary request, and the continuation that follows
+// in the next context window.
+func (f *gatewayFixture) respondCompaction(r *http.Request, body fixtureResponseRequest, transport string, write func([]byte) error) bool {
+	contains := func(text string) bool {
+		return slices.ContainsFunc(body.Input, func(item fixtureInput) bool { return bytes.Contains(item.Content, []byte(text)) })
+	}
+	toolOutput := slices.ContainsFunc(body.Input, func(item fixtureInput) bool {
+		return item.Type == "function_call_output" && item.CallID == "call_fixture_1" && bytes.Contains(item.Output, []byte(fixtureSeed))
+	})
+	compaction := contains(fixtureCompactPrompt)
+	f.mu.Lock()
+	round := len(f.rounds)
+	f.rounds = append(f.rounds, fixtureInference{
+		Path: r.URL.Path, Transport: transport, Identity: f.identity(),
+		Model: body.Model, Previous: body.PreviousResponseID, Compaction: compaction,
+	})
+	f.mu.Unlock()
+	var item []byte
+	var result string
+	usageIn, usageOut := 20+round, 5+round
+	switch {
+	case round == 0 && !compaction && !toolOutput:
+		arguments, _ := json.Marshal(map[string]any{"cmd": "printf 'CLOUDEX_SEED=314159'", "yield_time_ms": 1000})
+		item = fmt.Appendf(nil, `{"id":"function_1","type":"function_call","status":"completed","call_id":"call_fixture_1","name":"exec_command","arguments":%q}`, string(arguments))
+		usageIn = 2 * fixtureCompactLimit
+	case round == 1 && compaction && toolOutput:
+		item = fmt.Appendf(nil, `{"id":"message_summary","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}`, fixtureCompactSummary)
+		result = "call_fixture_1"
+	case round == 2 && !compaction && contains(fixtureCompactSummary):
+		item = fmt.Appendf(nil, `{"id":"message_final","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}`, fixtureSuccess)
+	default:
+		kinds := make([]string, 0, len(body.Input))
+		for _, input := range body.Input {
+			kinds = append(kinds, input.Type)
+		}
+		f.t.Errorf("%s %s compaction round %d was unexpected: compaction=%t tool_output=%t input=%v", f.channel, transport, round+1, compaction, toolOutput, kinds)
+		return false
+	}
+	responseID := fmt.Sprintf("response_%d", round+1)
+	if err := write(fmt.Appendf(nil, `{"type":"response.created","response":{"id":%q,"status":"in_progress"}}`, responseID)); err != nil {
+		return false
+	}
+	if err := write(append(append([]byte(`{"type":"response.output_item.done","item":`), item...), '}')); err != nil {
+		return false
+	}
+	f.mu.Lock()
+	f.rounds[round].ToolResult = result
+	f.rounds[round].Terminal = "response.completed"
+	f.rounds[round].InputTokens, f.rounds[round].OutputTokens = usageIn, usageOut
+	f.mu.Unlock()
+	return write(fmt.Appendf(nil, `{"type":"response.completed","response":{"id":%q,"status":"completed","usage":{"input_tokens":%d,"output_tokens":%d,"total_tokens":%d}}}`, responseID, usageIn, usageOut, usageIn+usageOut)) == nil
 }
 
 func (f *gatewayFixture) snapshot() (catalogs, upgrades, titles int, inference []fixtureInference) {

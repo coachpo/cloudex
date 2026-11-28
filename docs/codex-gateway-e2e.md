@@ -24,6 +24,7 @@ CLOUDEX_TEST_CODEX_BIN=/absolute/path/to/codex go test -count=1 -v ./cmd/server 
 | 生成前拒绝 Upgrade | 假上游只收到一次握手，返回 `426` 或 ChatGPT 专用的 `403 subscription_sharing_route_not_supported` 后，收到同一授权同一模型的 SSE。WS 未收到生成。 |
 | SSE 上游省略媒体类型 | 省略 `Content-Type` 的 CR 和 BOM 流以 `text/event-stream` 转发。固定客户端核对同一身份下的两次工具往返和终态。 |
 | 生成已送达后断流、丢失终态和控制面退出 | 原运行的自动重连或 SSE 重试遭拒。假上游看到的生成次数仍为一次。 |
+| 同一轮工具往返中触发自动压缩，两渠道各测 WS 与强制 SSE | 首次生成的 usage 超过客户端的自动压缩阈值。压缩请求带回工具结果并完成，下一上下文窗口的续写恰好送达假上游一次，最终 `response.completed`。WS 在新窗口重新握手一次。 |
 | W1/W2 共享 A，另加 B | W1/W2 并发只兑换一次 A，B 独立可用，添加 B 不影响原绑定或流。 |
 | 刷新落库前退出；重授权后旧刷新回包 | 未确认的兑换阻止再次使用旧 refresh token，迟到结果不能修改新授权。已明确临时失败与明确永久失效分别校验。 |
 | A 重新授权误选 B；撤销 A | 误选保持两份记录和绑定。撤销只停止 A，并验证其渠道的撤权字段、请求次数及远端不确定时的本地状态。 |
@@ -93,6 +94,7 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 | --- | --- | --- | --- |
 | [固定客户端与受控上游](#固定客户端与受控上游)、[镜像与分机验证](#镜像与分机验证)的受控矩阵 | 本机固定二进制与隔离 Colima Docker，`codex-cli 0.172.0`，合成授权与假上游 | 无，原记录未写受验提交 | 原生矩阵 9 项和 Docker 矩阵 10 项均通过，明细见[受控执行记录](#受控执行记录)。 |
 | [Codex 启动配置](#codex-启动配置) | 本机 `codex-cli 0.172.0`、Python 3.14.6、合成授权与 ChatGPT WS 假上游 | 无 | 基于 `c6457666143b04b35254367bb6bf512ce4de29b8` 的未提交工作区通过原生矩阵 12 项。首个生成请求含 `CLOUDEX_GLOBAL_AGENTS` 与 `additional_tools` 中的 `fixture_ping`。写入和清除后的文件符合预期。Docker 本轮未运行。 |
+| [固定客户端与受控上游](#固定客户端与受控上游)的同轮自动压缩 | 本机 `codex-cli 0.172.0`、合成授权与假上游 | 无 | 基于 `4c02ae4eca3637e90ee303c155257c0012495e5b` 的未提交工作区通过原生矩阵 16 项，其中两渠道 WS 与强制 SSE 的压缩场景各 1 项。每项的压缩请求带回 `call_fixture_1`，新窗口续写恰好送达一次并完成。Docker 本轮未运行。 |
 | [真实账号验收](#真实账号验收)：两渠道 WS 与 SSE 的工具往返及撤权 | 独立 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | 无，原记录的提交不可达且没有等价提交 | 通过，明细见[真实账号执行记录](#真实账号执行记录)。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。 |
 | [换回原授权的镜像复验](#换回原授权的镜像复验) | 隔离的本地 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | `375a5720a57556ac3fb4401d19bf768ec8ce5277` | 通过，WebSocket 与 SSE 两轮 A → B → A，明细见[真实账号执行记录](#真实账号执行记录)。 |
 

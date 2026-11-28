@@ -4,6 +4,7 @@
 
 ## 未发布
 
+- 同一轮工具往返中触发自动压缩后，Codex 在新上下文窗口的续写可经 WS 和 HTTP/SSE 正常完成，不再收到 `409 submission_outcome_unknown`。[流式转发](docs/codex-gateway.md#流式转发)
 - 管理员可在设置页统一编辑 Codex 的 `config.toml` 和 `AGENTS.md`。绑定授权的 Workspace 在下一次启动 Codex 时读取保存的版本，Desktop 重新连接后生效。[Codex 启动配置](docs/operations.md#配置-codex-启动文件)
 - 新建 Workspace 时可使用随机名称或掷骰子换一个，SSH 别名优先使用可读的 Workspace 名称，Codex 设备码支持一键复制和打开验证页时复制。
 - Workspace 镜像 `ghcr.io/coachpo/cloudex-workspace` 以 `linux/amd64` 与 `linux/arm64` 多架构发布，两种架构分别通过版本核对和网关验收后才更新标签。原单架构的 `codex-0.172.0` 已按多架构重新发布。[预构建镜像](docs/operations.md#预构建镜像)
