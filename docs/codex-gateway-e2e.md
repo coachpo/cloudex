@@ -1,6 +1,6 @@
 # Codex 网关验收
 
-默认验收基线为 Codex `0.172.0`，源码基线为 `3d86e43b075adeba2193ec5c22ac92f55afd82e6`。先在被测入口运行 `codex --version`。本机执行的固定二进制、隔离 Docker 镜像内的客户端、真实部署中的远程 Host 是三种验证环境，分别记录。
+默认验收的客户端为 Codex `0.172.0`，对应 Codex 上游源码提交 `3d86e43b075adeba2193ec5c22ac92f55afd82e6`。先在被测入口运行 `codex --version`。本机执行的固定二进制、隔离 Docker 镜像内的客户端、真实部署中的远程 Host 是三种验证环境，分别记录。
 
 ## 固定客户端与受控上游
 
@@ -65,7 +65,33 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 
 验收默认 Compose 时，从工作容器所在网络请求默认推理入口的 `/g/v1/models`。使用无效实例凭据时，应收到 `401 invalid_gateway_credential`，可据此确认 DNS、HTTP 路由和网关鉴权已接通。再检查同一容器无法连接控制台、共享 SSH Gateway、Agent 或 OAuth 回调的管理端口，同时确认这些入口仍可从原先配置的宿主机地址访问，且推理端口未发布到宿主机。需要确认推理时，使用绑定合成授权的实际 Workspace 完成工具往返并收到 `response.completed`。
 
-## 受控验收记录
+## 真实账号验收
+
+真实上游验收需要获授权的本人账号、应用注册和确切操作范围。每个渠道分别验证回调身份、scope、模型目录、同一模型 WS 和 SSE 两格的两次工具往返、终态，以及一次实际刷新。要求专属路由的 Codex workspace 分别验证目录与 Responses 的最终路由。记录上游请求 ID；服务端未回显 workspace 时标为未知。故障和竞态由受控上游提供确定性证据。OpenAI 对部署形态的正式支持独立于以上结果。[公开支持边界](codex-gateway.md#上游公开支持边界)
+
+### 换回原授权的镜像复验
+
+在[隔离 Docker 环境](#镜像与分机验证)使用待验收的工作镜像和两份获准用于验收的授权 A、B，分别跑 WebSocket 和 SSE。每轮保持 Workspace 容器运行，沿用两份授权的原代次。每次换绑都等新凭据就绪，再从正式启动器运行新的 Codex 进程。WebSocket 轮使用默认传输，SSE 轮在每次 `codex` 调用中传入 `-c model_providers.cloudex.supports_websockets=false`。
+
+在 Workspace 到网关的链路上采集请求的传输、状态和终态事件类型。使用观测代理时须保留 WebSocket 升级和 SSE flush。[日志约定](operations.md#配置两条网络路径)
+
+1. 首次绑定 A 时运行 `codex exec --json`，让工具生成一个随机 UUID，要求客户端只回复固定确认语，使 UUID 仅出现于工具结果。记录会话 ID 和该结果。在测试进程中保留首次绑定 A 的网关凭据，供本轮失效检查。
+2. 换绑 B 并完成一轮请求，再切回 A。用 `codex exec resume --json` 和本轮原会话 ID 续聊，要求直接复述先前工具返回的 UUID，提示词里省略该值。成功时 UUID 一致，新增工具调用为零，上游收到续聊请求且客户端收到 `response.completed`。
+3. 用本轮首次绑定 A 时的旧凭据请求 `/g/v1/models`，核对 `401 invalid_gateway_credential`。同时核对实际传输。WebSocket 轮须观测到 `101` 和经 WebSocket 送达的终态，且 `POST /g/v1/responses` 的 SSE 请求数为零。SSE 轮须观测到 SSE 送达的终态。证据只记录必要的请求与结果元数据，省略账号信息和凭据值。
+
+## 当前验收记录
+
+按[验证改动](../CONTRIBUTING.md#验证改动)从各行的通过提交选择场景，场景通过后更新对应行。未列出的场景（如[换回原授权的受控回归](#换回原授权的受控回归)）尚无通过记录。
+
+换绑复验原记录的 `af4d97e` 在仓库历史重建后不可达。它与主线 `375a5720a57556ac3fb4401d19bf768ec8ce5277` 只差 `.md` 文件，因此改指该提交。真实账号验收原记录的合成版 `8427356` 同样不可达。主线上与它差异最小的 `7c2b288` 仍缺少 `apps/api/internal/codexgateway/stream_sse.go`、`stream_ws.go` 及相应测试中的传输改动，没有等价提交，按没有通过记录处理。受控验收的原记录没有写受验提交。
+
+| 场景 | 层与环境 | 最近通过的提交 | 结果与证据 |
+| --- | --- | --- | --- |
+| [固定客户端与受控上游](#固定客户端与受控上游)、[镜像与分机验证](#镜像与分机验证)的受控矩阵 | 本机固定二进制与隔离 Colima Docker，`codex-cli 0.172.0`，合成授权与假上游 | 无，原记录未写受验提交 | 原生矩阵 9 项和 Docker 矩阵 10 项均通过，明细见[受控执行记录](#受控执行记录)。 |
+| [真实账号验收](#真实账号验收)：两渠道 WS 与 SSE 的工具往返及撤权 | 独立 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | 无，原记录的提交不可达且没有等价提交 | 通过，明细见[真实账号执行记录](#真实账号执行记录)。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。 |
+| [换回原授权的镜像复验](#换回原授权的镜像复验) | 隔离的本地 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | `375a5720a57556ac3fb4401d19bf768ec8ce5277` | 通过，WebSocket 与 SSE 两轮 A → B → A，明细见[真实账号执行记录](#真实账号执行记录)。 |
+
+### 受控执行记录
 
 固定版原生二进制与隔离 Colima Docker 内的工作镜像均运行 `codex-cli 0.172.0`。原生矩阵 9 项和 Docker 矩阵 10 项均通过。Docker 客户端经真实 tmpfs 安装和 `codex` 启动器，通过 TLS 连接宿主上的 Go 路由。假上游记录如下。[客户端验收源码](../apps/api/cmd/server/gateway_acceptance_test.go)
 
@@ -84,21 +110,7 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 - Agent mTLS 与固定主机密钥的 SSH 分别核验了实际 Docker 凭据安装路径。控制面生命周期测试覆盖了真实的容器操作与数据库重启。Host 离线用运行时检查故障注入。浏览器回环和 SSH 转发经独立的本地监听地址验证。[Host 接入测试](../apps/api/internal/agentlink/gateway_credential_test.go) · [生命周期测试](../apps/api/cmd/server/gateway_lifecycle_test.go) · [回调转发测试](../apps/api/cmd/server/gateway_callback_tunnel_test.go)
 - Colima 内的 Codex 内嵌 `bwrap` 沙箱因无法创建用户命名空间而拒绝执行工具。Docker 矩阵使用上述测试选项验证客户端、启动器、TLS 和工具协议。部署 Host 的默认内嵌沙箱能力需要在其实际容器内单独验证。
 
-## 真实账号验收
-
-真实上游验收需要获授权的本人账号、应用注册和确切操作范围。每个渠道分别验证回调身份、scope、模型目录、同一模型 WS 和 SSE 两格的两次工具往返、终态，以及一次实际刷新。要求专属路由的 Codex workspace 分别验证目录与 Responses 的最终路由。记录上游请求 ID；服务端未回显 workspace 时标为未知。故障和竞态由受控上游提供确定性证据。OpenAI 对部署形态的正式支持独立于以上结果。[公开支持边界](codex-gateway.md#上游公开支持边界)
-
-### 换回原授权的镜像复验
-
-在[隔离 Docker 环境](#镜像与分机验证)使用待验收的工作镜像和两份获准用于验收的授权 A、B，分别跑 WebSocket 和 SSE。每轮保持 Workspace 容器运行，沿用两份授权的原代次。每次换绑都等新凭据就绪，再从正式启动器运行新的 Codex 进程。WebSocket 轮使用默认传输，SSE 轮在每次 `codex` 调用中传入 `-c model_providers.cloudex.supports_websockets=false`。
-
-在 Workspace 到网关的链路上采集请求的传输、状态和终态事件类型。使用观测代理时须保留 WebSocket 升级和 SSE flush。[日志约定](operations.md#配置两条网络路径)
-
-1. 首次绑定 A 时运行 `codex exec --json`，让工具生成一个随机 UUID，要求客户端只回复固定确认语，使 UUID 仅出现于工具结果。记录会话 ID 和该结果。在测试进程中保留首次绑定 A 的网关凭据，供本轮失效检查。
-2. 换绑 B 并完成一轮请求，再切回 A。用 `codex exec resume --json` 和本轮原会话 ID 续聊，要求直接复述先前工具返回的 UUID，提示词里省略该值。成功时 UUID 一致，新增工具调用为零，上游收到续聊请求且客户端收到 `response.completed`。
-3. 用本轮首次绑定 A 时的旧凭据请求 `/g/v1/models`，核对 `401 invalid_gateway_credential`。同时核对实际传输。WebSocket 轮须观测到 `101` 和经 WebSocket 送达的终态，且 `POST /g/v1/responses` 的 SSE 请求数为零。SSE 轮须观测到 SSE 送达的终态。证据只记录必要的请求与结果元数据，省略账号信息和凭据值。
-
-### 验收记录
+### 真实账号执行记录
 
 2026-11-27，合成版 `8427356` 在独立 Colima Docker 环境中使用 `codex-cli 0.172.0` 和 `gpt-6.2-sol` 完成真实账号验收。Sign in with Codex 和 Sign in with ChatGPT 分别通过 WebSocket 和强制 HTTP/SSE 完成两次有依赖的工具往返，四格均收到 `response.completed`。撤销测试中，两渠道上游均确认撤权，原实例凭据随后被网关拒绝。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。
 

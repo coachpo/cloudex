@@ -14,7 +14,7 @@
 
 Cloudex APP 的 `linux/arm64` 镜像 `ghcr.io/coachpo/cloudex-api`、`ghcr.io/coachpo/cloudex-agent` 和 `ghcr.io/coachpo/cloudex-web` 使用同一 Cloudex 发布标签。推送 `v*` 标签时发布原标签、语义化版本 `<主>.<次>.<修订>` 和 `<主>.<次>`、`sha-<完整提交>` 及 `latest`。手动构建使用 `manual-<完整提交>`。[APP 镜像工作流](../.github/workflows/docker-images.yml)
 
-Workspace 镜像独立于 Cloudex APP 发版。独立工作流定时检查 [Codex 官方稳定版](https://github.com/openai/codex/releases/latest)。对应版本可从 npm 安装且 `ghcr.io/coachpo/cloudex-workspace:codex-<版本>` 尚未发布时，用候选镜像核对 `codex --version`，再运行当前仓库网关的受控验收。两项通过后发布该候选镜像。APP 发版和 Workspace 发版可各自进行，已发布的 Codex 标签直接复用。发布新标签不改变默认工作镜像。[Workspace 镜像工作流](../.github/workflows/workspace-image.yml) · [候选镜像验收](codex-gateway-acceptance.md#镜像与分机验证)
+Workspace 镜像独立于 Cloudex APP 发版。独立工作流定时检查 [Codex 官方稳定版](https://github.com/openai/codex/releases/latest)。对应版本可从 npm 安装且 `ghcr.io/coachpo/cloudex-workspace:codex-<版本>` 尚未发布时，用候选镜像核对 `codex --version`，再运行当前仓库网关的受控验收。两项通过后发布该候选镜像。APP 发版和 Workspace 发版可各自进行，已发布的 Codex 标签直接复用。发布新标签不改变默认工作镜像。[Workspace 镜像工作流](../.github/workflows/workspace-image.yml) · [候选镜像验收](codex-gateway-e2e.md#镜像与分机验证)
 
 ### 默认工作镜像
 
@@ -60,7 +60,7 @@ ssh -N -L 127.0.0.1:1455:127.0.0.1:1455 user@control-plane-host
 codex exec --skip-git-repo-check --json 'Return CLOUDEX_OK.'
 ```
 
-在固定客户端与受控假上游中验收协议和转发，再分别按两种渠道的[公开支持边界](codex-gateway.md#上游公开支持边界)核实真实环境。登录、模型目录、建立连接、完成工具往返和最终 `response.completed` 各自对应不同验证阶段。[验收矩阵](codex-gateway-acceptance.md)
+在固定客户端与受控假上游中验收协议和转发，再分别按两种渠道的[公开支持边界](codex-gateway.md#上游公开支持边界)核实真实环境。登录、模型目录、建立连接、完成工具往返和最终 `response.completed` 各自对应不同验证阶段。[验收矩阵](codex-gateway-e2e.md)
 
 #### 手动提交回调 URL
 

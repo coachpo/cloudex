@@ -24,7 +24,7 @@ Cloudex 由一个控制面管理多台 Docker Host。Agent 模式由 Host 主动
 
 - [HTTP API](docs/api.md)给出路由、请求格式和领域契约的入口。
 - [双渠道 Codex 网关](docs/codex-gateway.md)说明授权、模型目录、流式推理和换绑契约。
-- [验收](docs/codex-gateway-acceptance.md)覆盖两渠道传输与部署拓扑。[控制台验收](docs/console-acceptance.md)覆盖浏览器访问与操作。
+- [验收](docs/codex-gateway-e2e.md)覆盖两渠道传输与部署拓扑。[控制台验收](docs/console-e2e.md)覆盖浏览器访问与操作。
 - [ADR 0006](docs/adr/0006-dual-channel-codex-gateway.md)记录可丢弃容器、授权、实例凭据和转发权的决策。
 - [ADR 0007](docs/adr/0007-host-removal.md)记录 Host 移除时的历史取舍与资源归属边界。
 - [ADR 0002](docs/adr/0002-workspace-repository-credential.md)记录 HTTPS 仓库令牌的使用范围、可见性与撤销边界。

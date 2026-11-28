@@ -1,6 +1,6 @@
 # 控制台端到端验收
 
-使用完整本地控制面、浏览器和可丢弃的 Docker Host。先按[验证入口](../CONTRIBUTING.md#项目验证入口)构建，再按[安装步骤](operations.md#安装与入口)启动。推理接入见 [Codex 网关验收](codex-gateway-acceptance.md)。
+使用完整本地控制面、浏览器和可丢弃的 Docker Host。先按[验证入口](../CONTRIBUTING.md#项目验证入口)构建，再按[安装步骤](operations.md#安装与入口)启动。推理接入见 [Codex 网关验收](codex-gateway-e2e.md)。
 
 ## 创建回执丢失后重试
 
@@ -32,3 +32,7 @@
 |---|---|---|
 | [Host 删除回执丢失](../apps/web/tests/host-removal.browser.js) | 在 Host 详情确认删除，丢弃 DELETE 回执。分别让后续详情读取返回 `404`、返回原登记，或持续失败。 | `404` 时显示已移除，Hosts 列表和 Workspace 放置选项均移除该 Host。查到原登记时允许重试。读取失败时显示结果待确认，重新检查仅发读取请求。 |
 | [Codex 授权保存失败](../apps/web/tests/grants.browser.js) | 到达授权确认页，令保存返回带具体错误的 `409`。暂挂随后的状态查询，再以 `404` 结束查询。 | 暂挂期间立即显示原错误，允许取消，保存按钮停用。收到 `404` 后撤下保存按钮，原错误仍可见。 |
+
+## 当前验收记录
+
+尚无通过记录。按[验证改动](../CONTRIBUTING.md#验证改动)，所有场景视为受影响；场景通过后在此逐场景写入通过提交、环境和证据。

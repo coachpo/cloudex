@@ -48,4 +48,4 @@ Codex 启动器按授权 ID 和授权代次选择容器内的会话空间。同�
 - **Sign in with Codex。** 官方文档覆盖在本人远端机器运行官方客户端的登录方式。App Server 文档说明已有本地或开源应用可继续使用其认证，建议迁移到 SIWC，商业或托管服务不在其许可范围内。公开资料对新第三方网关直接复用第一方 Codex 注册、长期持有多个授权并直连 Codex 后端的正式支持未确认。[官方远端登录](https://learn.chatgpt.com/docs/auth#login-on-headless-devices) · [App Server 认证说明](https://learn.chatgpt.com/docs/app-server#auth-endpoints)
 - **Sign in with ChatGPT。** SIWC Terms §3.1 覆盖本人控制的远端 runtime，要求本人授权及只用于已连接应用，并限制套餐池化和规避限额。§1 则要求持久化认证令牌保存在本人控制的本地环境，排除远端或托管环境。自托管 VM 指南描述了在浏览器机器完成登录，经 SSH 转移受保护凭据，由 VM 负责刷新。Cloudex 的浏览器回环转发和远端控制面长期保存方式仍需 OpenAI 确认这些规则在该部署形态下的适用范围。[SIWC Terms §1、§3.1](https://openai.com/policies/sign-in-with-chatgpt-terms/) · [自托管 VM 指南](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)
 
-[工程验收](codex-gateway-acceptance.md)记录客户端、假上游及受控拓扑的行为。正式支持需要独立的上游依据。
+[工程验收](codex-gateway-e2e.md)记录客户端、假上游及受控拓扑的行为。正式支持需要独立的上游依据。
