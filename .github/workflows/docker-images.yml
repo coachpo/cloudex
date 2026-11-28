@@ -13,7 +13,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  BUILD_PLATFORM: linux/arm64
+  BUILD_PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   verify:
@@ -69,6 +69,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Go cross-compiles natively. The web build runs per platform under QEMU
+      # because its standalone output bundles platform-specific sharp binaries.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: amd64
+
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v4
@@ -95,8 +102,8 @@ jobs:
             type=sha,format=long,prefix=manual-,enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
 
-      # Single-platform images without attestations keep one plain manifest per
-      # tag, so a deployment can pin and verify one digest per image.
+      # Without attestations each tag is an index of the platform manifests only,
+      # so a deployment pins one digest per image and Docker selects the platform.
       - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v7
         with:
@@ -109,6 +116,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
-          platforms: ${{ env.BUILD_PLATFORM }}
+          platforms: ${{ env.BUILD_PLATFORMS }}
           provenance: false
           sbom: false
