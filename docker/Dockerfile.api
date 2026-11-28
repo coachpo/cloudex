@@ -3,8 +3,11 @@ WORKDIR /build
 COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download
 COPY apps/api/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cloudex-server ./cmd/server
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cloudex-agent ./cmd/host-agent
+ARG CLOUDEX_WORKSPACE_IMAGE=cloudex/workspace:local
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X github.com/coachpo/cloudex/apps/api/internal/store.DefaultWorkspaceImage=${CLOUDEX_WORKSPACE_IMAGE}" \
+    -o /out/cloudex-server ./cmd/server
 
 FROM debian:trixie-slim AS agent
 COPY --from=build /out/cloudex-agent /usr/local/bin/cloudex-agent

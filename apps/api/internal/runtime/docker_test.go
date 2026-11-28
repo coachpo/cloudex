@@ -212,7 +212,7 @@ func TestDockerExecAttachRejectsPauseBeforeStart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{
-		Image: "cloudex/workspace:codex-0.172.0", Cmd: []string{"sleep", "infinity"},
+		Image: "cloudex/workspace:local", Cmd: []string{"sleep", "infinity"},
 	}})
 	if err != nil {
 		t.Fatal(err)

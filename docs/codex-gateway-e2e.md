@@ -48,13 +48,13 @@ go test -count=1 -v ./internal/codexgateway -run '^TestGatewayRebindRestoresComp
 使用独立、可丢弃的 Docker daemon。从仓库根目录构建工作镜像。把 `CLOUDEX_TEST_GATEWAY_DNS` 设为工作容器可解析且能够连接到测试进程的 DNS 名或 IPv4 地址，例如 Docker Desktop 提供的 `host.docker.internal`。测试进程使用临时端口和测试 CA，工作容器内通过正式启动器运行客户端。Docker 测试由可丢弃容器提供工具执行隔离，测试命令显式选择 Codex 的 `danger-full-access`。生产镜像的 Codex 沙箱默认值不受测试选项影响。
 
 ```sh
-docker build -f docker/Dockerfile.workspace -t cloudex/workspace:codex-0.172.0 .
+docker build -f docker/Dockerfile.workspace -t cloudex/workspace:local .
 cd apps/api
 CLOUDEX_TEST_DOCKER=1 CLOUDEX_TEST_GATEWAY_DNS=host.docker.internal \
   go test -count=1 -v ./cmd/server -run '^TestPinnedCodexGatewayMatrix$/docker'
 ```
 
-验证待发布的镜像时，在同一 Docker daemon 加载候选镜像，并同时设置 `CLOUDEX_TEST_WORKSPACE_IMAGE` 和 `CLOUDEX_TEST_CODEX_VERSION`，分别指向候选镜像引用和预期版本。上面的 Docker 矩阵会通过镜像内的正式启动器校验版本并验证网关协议。受控验收使用合成授权和本地假上游。 [Workspace 镜像工作流](../.github/workflows/workspace-image.yml)
+验证待发布的镜像时，在同一 Docker daemon 加载候选镜像，并同时设置 `CLOUDEX_TEST_WORKSPACE_IMAGE` 和 `CLOUDEX_TEST_CODEX_VERSION`，分别指向候选镜像引用和预期版本。上面的 Docker 矩阵会通过镜像内的正式启动器校验版本并验证网关协议。受控验收使用合成授权和本地假上游。[镜像发布工作流](../.github/workflows/docker-images.yml)
 
 分机验收时保持浏览器、控制面和 Docker Host 的网络路径可区分。Agent mTLS 与 SSH 直连分别跑一次。在工作容器内验证 DNS、TLS、Upgrade、SSE flush、`codex --version`、`codex exec` 及 `codex app-server`。浏览器回环须到达控制面宿主。[Docker 验证入口](../CONTRIBUTING.md#docker-验收) · [网络配置](operations.md#配置两条网络路径)
 

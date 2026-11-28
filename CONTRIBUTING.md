@@ -67,7 +67,7 @@
 仅在独立、可丢弃的测试 Docker daemon 上执行。在同一 daemon 构建标准工作镜像，再从仓库根目录运行生命周期验收。
 
 ```sh
-docker build -f docker/Dockerfile.workspace -t cloudex/workspace:codex-0.172.0 .
+docker build -f docker/Dockerfile.workspace -t cloudex/workspace:local .
 (cd apps/api && CLOUDEX_TEST_DOCKER=1 go test -v ./internal/httpapi -run '^TestDocker(WorkspaceLifecycle|HostRemovalPreservesVolumes)$')
 ```
 

@@ -6,7 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-const DefaultWorkspaceImage = "cloudex/workspace:codex-0.172.0"
+// DefaultWorkspaceImage can be set at build time with -ldflags -X.
+var DefaultWorkspaceImage = "cloudex/workspace:local"
 
 type Settings struct {
 	SSHHost            string

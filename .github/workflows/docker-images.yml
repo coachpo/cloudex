@@ -1,4 +1,4 @@
-name: Cloudex App Images
+name: Cloudex Images
 
 # Release tags publish versioned images after the repository checks pass.
 # Manual runs publish manual-<full sha> tags only and never move latest.
@@ -97,6 +97,13 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: &release_tags |
+            type=ref,event=tag,enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
+            type=sha,format=long,enable=${{ github.event_name == 'push' }}
+            type=sha,format=long,prefix=manual-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push ${{ matrix.image }} for ${{ matrix.platform }}
         id: build
@@ -106,6 +113,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
+          build-args: ${{ matrix.image == 'cloudex-api' && format('CLOUDEX_WORKSPACE_IMAGE={0}/{1}/cloudex-workspace:{2}', env.REGISTRY, github.repository_owner, steps.meta.outputs.version) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
@@ -129,8 +137,114 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  workspace:
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    env:
+      CANDIDATE_IMAGE: cloudex/workspace:candidate
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/cloudex-workspace
+          tags: *release_tags
+
+      # Export both copies from one build so the published image is the one tested.
+      - name: Build and load candidate image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.workspace
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ env.CANDIDATE_IMAGE }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=oci,dest=${{ runner.temp }}/workspace-oci,tar=false
+          provenance: false
+          sbom: false
+
+      - name: Validate candidate version and run gateway acceptance
+        working-directory: apps/api
+        env:
+          CLOUDEX_TEST_DOCKER: '1'
+          CLOUDEX_TEST_WORKSPACE_IMAGE: ${{ env.CANDIDATE_IMAGE }}
+        shell: bash
+        run: |
+          # The image must ship the Codex version the control plane pins.
+          CLOUDEX_TEST_CODEX_VERSION=$(sed -nE 's/^[[:space:]]*CodexClientVersion[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' internal/codexupstream/client.go)
+          if [[ -z "$CLOUDEX_TEST_CODEX_VERSION" ]]; then
+            echo "CodexClientVersion was not found in internal/codexupstream/client.go" >&2
+            exit 1
+          fi
+          export CLOUDEX_TEST_CODEX_VERSION
+          installed=$(docker run --rm --user coder --entrypoint codex "$CLOUDEX_TEST_WORKSPACE_IMAGE" --version)
+          if [[ "$installed" != "codex-cli $CLOUDEX_TEST_CODEX_VERSION" ]]; then
+            echo "Expected codex-cli $CLOUDEX_TEST_CODEX_VERSION from CodexClientVersion, got $installed. Update CODEX_VERSION in docker/Dockerfile.workspace and CodexClientVersion together." >&2
+            exit 1
+          fi
+          CLOUDEX_TEST_GATEWAY_DNS=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+          export CLOUDEX_TEST_GATEWAY_DNS
+          go test -count=1 -v ./cmd/server -run '^TestPinnedCodexGatewayMatrix$/docker$'
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the tested image by digest
+        env:
+          REPOSITORY: ${{ env.REGISTRY }}/${{ github.repository_owner }}/cloudex-workspace
+        run: |
+          # The arm64 runner image does not list skopeo.
+          if ! command -v skopeo >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends skopeo
+          fi
+          layout="$RUNNER_TEMP/workspace-oci"
+          digest=$(jq -er '.manifests[0].digest' "$layout/index.json")
+          skopeo copy --preserve-digests "oci:$layout" "docker://$REPOSITORY@$digest"
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-cloudex-workspace-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
   merge:
-    needs: build
+    needs: [build, workspace]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -139,7 +253,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        image: [cloudex-api, cloudex-agent, cloudex-web]
+        image: [cloudex-api, cloudex-agent, cloudex-web, cloudex-workspace]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -163,13 +277,7 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
-          tags: |
-            type=ref,event=tag,enable=${{ github.event_name == 'push' }}
-            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
-            type=sha,format=long,enable=${{ github.event_name == 'push' }}
-            type=sha,format=long,prefix=manual-,enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+          tags: *release_tags
 
       # Without attestations each tag is an index of the platform manifests only,
       # so a deployment pins one digest per image and Docker selects the platform.

@@ -155,7 +155,7 @@ func TestWorkspaceImageSettingsDefaultSaveAndRejectInvalid(t *testing.T) {
 			t.Fatalf("workspace_image = %q; want %q", got["workspace_image"], want)
 		}
 	}
-	assertImage("cloudex/workspace:codex-0.172.0")
+	assertImage(store.DefaultWorkspaceImage)
 	var saved map[string]string
 	a.call(http.MethodPut, path, map[string]string{"image": " \tbusybox:V2\n"}, http.StatusOK, &saved)
 	if saved["workspace_image"] != "busybox:V2" {

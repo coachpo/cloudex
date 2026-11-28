@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
+      args:
+        CLOUDEX_WORKSPACE_IMAGE: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:local}
     environment:
       CLOUDEX_ADDR: cloudex-control:8080
       CLOUDEX_WEB_URL: http://web:3000
@@ -76,7 +78,7 @@ services:
 
   workspace-image:
     profiles: ["build"]
-    image: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:codex-0.172.0}
+    image: ${CLOUDEX_WORKSPACE_IMAGE:-cloudex/workspace:local}
     build:
       context: .
       dockerfile: docker/Dockerfile.workspace
