@@ -97,6 +97,7 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 | [固定客户端与受控上游](#固定客户端与受控上游)的同轮自动压缩 | 本机 `codex-cli 0.172.0`、Python 3.14.6、合成授权与假上游 | `faccae222c6168013d0ba7315b771c48c3e6ed40` | 原生矩阵 16 项通过，其中两渠道 WS 与强制 SSE 的压缩场景各 1 项。每项的压缩请求带回 `call_fixture_1`，新窗口续写恰好送达一次并完成。Docker 本轮未运行。 |
 | [真实账号验收](#真实账号验收)：两渠道 WS 与 SSE 的工具往返及撤权 | 独立 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | 无，原记录的提交不可达且没有等价提交 | 通过，明细见[真实账号执行记录](#真实账号执行记录)。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。 |
 | [换回原授权的镜像复验](#换回原授权的镜像复验) | 隔离的本地 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | `375a5720a57556ac3fb4401d19bf768ec8ce5277` | 通过，WebSocket 与 SSE 两轮 A → B → A，明细见[真实账号执行记录](#真实账号执行记录)。 |
+| [真实账号验收](#真实账号验收)：Sign in with Codex 的同轮自动压缩 | 本地 Colima Docker 的 Compose 部署，Workspace 镜像 `cloudex/workspace:codex-0.172.0`，`codex-cli 0.172.0`，`gpt-6.2-sol` | `44ae2fa85e1349da6cb237983bcc4d0904230af4` | WS 与强制 SSE 均通过，明细见[真实账号执行记录](#真实账号执行记录)。没有可用的 Sign in with ChatGPT 授权，该渠道未覆盖。 |
 
 ### 受控执行记录
 
@@ -127,3 +128,10 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 |---|---|---|
 | WebSocket | `1 → 2 → 3` | 3 次握手均返回 `101`，4 个 `response.completed` 经 WebSocket 送达，观测到 0 次 SSE `POST /g/v1/responses`，全程无 SSE 回退。 |
 | SSE | `3 → 4 → 5` | 4 个 `response.completed` 经 SSE 送达。 |
+
+2026-11-28，提交 `44ae2fa` 的本地 Compose 部署以 Sign in with Codex 授权、`codex-cli 0.172.0` 和 `gpt-6.2-sol` 复验同轮自动压缩。在运行中的 Workspace 内经正式启动器执行 `codex -c model_auto_compact_token_limit=1000 exec --json -s danger-full-access`，SSE 轮另加 `-c model_providers.cloudex.supports_websockets=false`。提示要求工具读取一次 `/proc/sys/kernel/random/uuid`，再只回复该值。每种传输各跑两轮，其中一轮带 `--ephemeral`，另一轮保留会话记录。四轮均收到 `turn.completed`，最终回复与工具输出的 UUID 一致。网关没有返回 `409`，也没有记录警告或错误。每轮的提交记录推进到序号 6，即生成、压缩和续写三次提交各完成预留与完成两步，终态为 `completed`。上游未回显 `req_` 形式的请求 ID。保留会话记录的两轮明细如下。
+
+| 传输 | 网关提交及 input tokens | 会话记录 |
+|---|---|---|
+| WebSocket | 3 次 `websocket` 提交均为 `response.completed`，依次 12153、12336、12293，无 SSE 回退。 | 工具调用和输出之后写入 `compacted`，随后新窗口续写，最终 `task_complete`。 |
+| SSE | 3 次 `sse` 提交均为 `response.completed`，依次 12153、12341、12308。 | 同上，各请求的 input tokens 与网关一致。 |
