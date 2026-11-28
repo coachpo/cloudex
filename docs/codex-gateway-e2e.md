@@ -93,8 +93,8 @@ DOCKER_HOST=unix:///absolute/path/to/test-docker.sock \
 | 场景 | 层与环境 | 最近通过的提交 | 结果与证据 |
 | --- | --- | --- | --- |
 | [固定客户端与受控上游](#固定客户端与受控上游)、[镜像与分机验证](#镜像与分机验证)的受控矩阵 | 本机固定二进制与隔离 Colima Docker，`codex-cli 0.172.0`，合成授权与假上游 | 无，原记录未写受验提交 | 原生矩阵 9 项和 Docker 矩阵 10 项均通过，明细见[受控执行记录](#受控执行记录)。 |
-| [Codex 启动配置](#codex-启动配置) | 本机 `codex-cli 0.172.0`、Python 3.14.6、合成授权与 ChatGPT WS 假上游 | 无 | 基于 `c6457666143b04b35254367bb6bf512ce4de29b8` 的未提交工作区通过原生矩阵 12 项。首个生成请求含 `CLOUDEX_GLOBAL_AGENTS` 与 `additional_tools` 中的 `fixture_ping`。写入和清除后的文件符合预期。Docker 本轮未运行。 |
-| [固定客户端与受控上游](#固定客户端与受控上游)的同轮自动压缩 | 本机 `codex-cli 0.172.0`、合成授权与假上游 | 无 | 基于 `4c02ae4eca3637e90ee303c155257c0012495e5b` 的未提交工作区通过原生矩阵 16 项，其中两渠道 WS 与强制 SSE 的压缩场景各 1 项。每项的压缩请求带回 `call_fixture_1`，新窗口续写恰好送达一次并完成。Docker 本轮未运行。 |
+| [Codex 启动配置](#codex-启动配置) | 本机 `codex-cli 0.172.0`、Python 3.14.6、合成授权与 ChatGPT WS 假上游 | `faccae222c6168013d0ba7315b771c48c3e6ed40` | 原生矩阵 16 项通过。首个生成请求含 `CLOUDEX_GLOBAL_AGENTS` 与 `additional_tools` 中的 `fixture_ping`。写入和清除后的文件符合预期。Docker 本轮未运行。 |
+| [固定客户端与受控上游](#固定客户端与受控上游)的同轮自动压缩 | 本机 `codex-cli 0.172.0`、Python 3.14.6、合成授权与假上游 | `faccae222c6168013d0ba7315b771c48c3e6ed40` | 原生矩阵 16 项通过，其中两渠道 WS 与强制 SSE 的压缩场景各 1 项。每项的压缩请求带回 `call_fixture_1`，新窗口续写恰好送达一次并完成。Docker 本轮未运行。 |
 | [真实账号验收](#真实账号验收)：两渠道 WS 与 SSE 的工具往返及撤权 | 独立 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | 无，原记录的提交不可达且没有等价提交 | 通过，明细见[真实账号执行记录](#真实账号执行记录)。该轮未覆盖正常到期刷新、Codex 专属 workspace 路由和实际分机 Host。 |
 | [换回原授权的镜像复验](#换回原授权的镜像复验) | 隔离的本地 Colima Docker，`codex-cli 0.172.0`，`gpt-6.2-sol` | `375a5720a57556ac3fb4401d19bf768ec8ce5277` | 通过，WebSocket 与 SSE 两轮 A → B → A，明细见[真实账号执行记录](#真实账号执行记录)。 |
 
